@@ -1,52 +1,31 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  # Banco de dados PostgreSQL
-  db:
-    image: postgres:15-alpine
-    container_name: conciliacao-db
-    environment:
-      POSTGRES_DB: conciliacao
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Backend FastAPI
   backend:
     build: ./backend
-    container_name: conciliacao-backend
+    container_name: conbank-backend
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/conciliacao
+      DATABASE_URL: postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/ConBank
+    networks:
+      - easypanel-n8n
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
 
-  # Frontend React
   frontend:
     build: ./frontend
-    container_name: conciliacao-frontend
+    container_name: conbank-frontend
+    environment:
+      # enquanto não tem domínio, aponta pro IP
+      - VITE_API_URL=http://147.79.86.63:8000
+    networks:
+      - easypanel-n8n
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    environment:
-      - VITE_API_URL=http://localhost:8000
+    restart: unless-stopped
+    # (opcional) se seu Dockerfile ainda é dev, tudo bem pra testar
 
-volumes:
-  postgres_data:
+networks:
+  easypanel-n8n:
+    external: true

@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 import os
 
 # URL do banco de dados
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/conciliacao")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/ConBank")
 
 # Criar engine
 engine = create_engine(

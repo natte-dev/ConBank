@@ -1,18 +1,15 @@
-FROM node:18-alpine
-
+# Build
+FROM node:18-alpine AS build
 WORKDIR /app
 
-# Copiar package files
-COPY package.json ./
-
-# Instalar dependências
+COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copiar código
 COPY . .
+RUN npm run build
 
-# Expor porta
-EXPOSE 3000
-
-# Comando para iniciar
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+# Serve
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
