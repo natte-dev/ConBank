@@ -12,23 +12,31 @@ import {
   Sun,
 } from 'lucide-react'
 import apiService from './services/api'
-import type { Arquivo, Resumo, Fornecedor, FornecedorDetalhado } from './services/api'
-import logo from './logo-41.png'
+import type { Arquivo, Fornecedor, FornecedorDetalhado } from './services/api'
 
-const PaginaFornecedores = () => {
-  const [fornecedores, setFornecedores] = useState([])
+interface Resumo {
+  total_fornecedores: number
+  total_lancamentos: number
+  fornecedores_quitados: number
+  fornecedores_em_aberto: number
+  fornecedores_adiantados: number
+  fornecedores_com_divergencia: number
+  valor_total_a_pagar: number
+}
 
-  return (
-    <div>
-      <FiltroParciaisPendentes
-        arquivoId={1}
-        onFiltroAplicado={setFornecedores}
-        />
+// Componente PaginaFornecedores removido - não estava sendo usado
+// Referenciava componentes não definidos: FiltroParciaisPendentes, ListaFornedores
 
-        <ListaFornedores data={fornecedores} />
-    </div>
-  );
-};
+// CÓDIGO ORIGINAL DO COMPONENTE (removido):
+// const PaginaFornecedores = () => {
+//   const [fornecedores, setFornecedores] = useState([])
+//   return (
+//     <div>
+//       <FiltroParciaisPendentes arquivoId={1} onFiltroAplicado={setFornecedores} />
+//       <ListaFornedores data={fornecedores} />
+//     </div>
+//   )
+// }
 
 // Estilos CSS embutidos
 const styles = `
@@ -818,7 +826,10 @@ function App() {
       <div className="container">
         <div className="header">
           <div className="header-content">
-            <img src={logo} alt="Logo 41 Contábil" className="logo" />
+            {/* Logo temporariamente comentado - arquivo logo-41.png não encontrado */}
+            {/* <img src={logo} alt="Logo 41 Contábil" className="logo" /> */}
+            {/* Alternativa: colocar logo.png em frontend/public/ e usar: */}
+            {/* <img src="/logo.png" alt="Logo 41 Contábil" className="logo" /> */}
 
             <div className="header-text">
               <h1>41 Contábil - Conciliador Bancário</h1>
