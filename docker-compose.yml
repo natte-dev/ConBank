@@ -22,7 +22,7 @@ services:
     networks:
       - easypanel-n8n
     ports:
-      - "3000:3000"
+      - "3001:3000"
     restart: unless-stopped
     # (opcional) se seu Dockerfile ainda é dev, tudo bem pra testar
 
