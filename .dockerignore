@@ -1,0 +1,62 @@
+# ============================================================================
+# .dockerignore - Otimizar Build do Docker
+# ============================================================================
+# Coloque este arquivo na RAIZ do projeto
+# ============================================================================
+
+# Node modules e build cache
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/.eslintcache
+frontend/coverage
+
+# Python
+backend/__pycache__
+backend/**/__pycache__
+backend/*.pyc
+backend/**/*.pyc
+backend/.pytest_cache
+backend/venv
+backend/env
+backend/.venv
+backend/*.egg-info
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env files (sensível)
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage
+.nyc_output
+
+# Misc
+*.md
+!README.md
+LICENSE
+.editorconfig
