@@ -5,7 +5,7 @@ services:
     build: ./backend
     container_name: conbank-backend
     environment:
-      DATABASE_URL: postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/ConBank
+      DATABASE_URL: postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/conbank
     networks:
       - easypanel-n8n
     ports:
