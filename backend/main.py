@@ -3,7 +3,9 @@ API FastAPI para o sistema de conciliação de fornecedores
 """
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -23,6 +25,14 @@ from consolidador import (
     consolidar_lancamentos_fornecedor,
     consolidar_todos_fornecedores
 )
+
+FRONT_DIR = Path(__file__).resolve().parent / "frontend"
+
+app.mount("/assets", StaticFiles(directory=FRONT_DIR / "assets"), name="assets")
+
+@app.get("/")
+async def spa_index():
+    return FileResponse(FRONT_DIR / "index.html")
 
 # Criar aplicação
 app = FastAPI(
