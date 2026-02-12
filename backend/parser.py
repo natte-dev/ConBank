@@ -69,7 +69,9 @@ def extrair_numero_nf(historico: str) -> Optional[str]:
         r'NOTA\s*FISCAL\s*(\d+)',            # NOTA FISCAL 12345
         r'CONFORME\s+NF[.\s]*(\d+)',        # CONFORME NF 12345
         r'^(\d{5,6})\s*-',                   # Número no início: "292065 - LOTUS"
-    ]
+        r'CONFORME\s+NF\s+N[ÚU]MERO\s+(\d+)',    # CONFORME NÚMERO 12345
+        r'CONF\.\s*NFS\s*(\d+)', #CONF. NFS 12345GOOGLE
+        ]
     
     for pattern in patterns:
         match = re.search(pattern, historico, re.IGNORECASE)

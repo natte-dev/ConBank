@@ -44,7 +44,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .
 COPY --from=frontend-build /app/dist ./static
 
-RUN test -f static/index.html || (echo "ERRO: static/index.html não encontrado" && exit 1)
+RUN test -f frontend/index.html || (echo "ERRO: frontend/index.html não encontrado" && exit 1)
 
 EXPOSE 8000
 
