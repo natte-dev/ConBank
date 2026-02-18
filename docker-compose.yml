@@ -1,31 +1,52 @@
-version: "3.8"
+networks:
+  easypanel:
+    external: true
+    name: easypanel
+  internal:
+    driver: bridge
 
 services:
   backend:
-    build: ./backend
-    container_name: conbank-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/conbank
+      - NODE_ENV=production
+      - PORT=8000
+    expose:
+      - "8000"
     networks:
-      - easypanel-n8n
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+      - internal
+      - easypanel
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=easypanel
+
+      # /api/* -> backend (strip /api antes de chegar no backend)
+      - traefik.http.routers.conbank-api.rule=Host(`<HOST>`) && PathPrefix(`/api`)
+      - traefik.http.routers.conbank-api.entrypoints=web
+      - traefik.http.routers.conbank-api.priority=100
+      - traefik.http.routers.conbank-api.middlewares=conbank-stripapi
+      - traefik.http.middlewares.conbank-stripapi.stripprefix.prefixes=/api
+      - traefik.http.services.conbank-api.loadbalancer.server.port=8000
 
   frontend:
-    build: ./frontend
-    container_name: conbank-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     environment:
-      # enquanto não tem domínio, aponta pro IP
-      - VITE_API_URL=http://147.79.86.63:8000
+      - NODE_ENV=production
+    expose:
+      - "80"
     networks:
-      - easypanel-n8n
-    ports:
-      - "3001:3000"
-    restart: unless-stopped
-    # (opcional) se seu Dockerfile ainda é dev, tudo bem pra testar
+      - internal
+      - easypanel
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=easypanel
 
-networks:
-  easypanel-n8n:
-    external: true
+      # frontend: todo o resto
+      - traefik.http.routers.conbank-web.rule=Host(`<HOST>`)
+      - traefik.http.routers.conbank-web.entrypoints=web
+      - traefik.http.routers.conbank-web.priority=1
+      - traefik.http.services.conbank-web.loadbalancer.server.port=80
