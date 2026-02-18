@@ -23,7 +23,7 @@ services:
       - traefik.docker.network=easypanel
 
       # /api/* -> backend (strip /api antes de chegar no backend)
-      - traefik.http.routers.conbank-api.rule=Host(`<HOST>`) && PathPrefix(`/api`)
+      - traefik.http.routers.conbank-api.rule=Host(`https://41tech-prisma.phy3nf.easypanel.host`) && PathPrefix(`/api`)
       - traefik.http.routers.conbank-api.entrypoints=web
       - traefik.http.routers.conbank-api.priority=100
       - traefik.http.routers.conbank-api.middlewares=conbank-stripapi
