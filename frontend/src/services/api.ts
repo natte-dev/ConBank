@@ -2,13 +2,12 @@ import axios from 'axios';
 
 const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || '';
 
-const API_PREFIX = import.meta.env.VITE_API_PREFIX || '/api';
+if (!API_ORIGIN) {
+  console.warn('VITE_API_ORIGIN não definido no build do frontend');
+}
 
 export const api = axios.create({
-  baseURL: `${API_ORIGIN}${API_PREFIX}`,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  baseURL: API_ORIGIN,
 });
 
 export interface Arquivo {
