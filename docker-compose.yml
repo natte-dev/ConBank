@@ -17,15 +17,17 @@ services:
       - easypanel
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
 
-      # /api/* -> backend, removendo /api antes de chegar nele
       - "traefik.http.routers.prisma-api.rule=Host(`41tech-prisma.phy3nf.easypanel.host`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.prisma-api.entrypoints=web,websecure"
       - "traefik.http.routers.prisma-api.tls=true"
+      - "traefik.http.routers.prisma-api.priority=100"
+
       - "traefik.http.routers.prisma-api.middlewares=prisma-stripapi"
       - "traefik.http.middlewares.prisma-stripapi.stripprefix.prefixes=/api"
-      - "traefik.http.routers.prisma-api.service=prisma-api"
+
       - "traefik.http.services.prisma-api.loadbalancer.server.port=8000"
+
 
   frontend:
     build:
@@ -38,11 +40,12 @@ services:
     networks:
       - easypanel
     labels:
-      - "traefik.enable=true"
+    - "traefik.enable=true"
+    - "traefik.docker.network=easypanel"
 
-      # frontend em /
-      - "traefik.http.routers.prisma-web.rule=Host(`41tech-prisma.phy3nf.easypanel.host`)"
-      - "traefik.http.routers.prisma-web.entrypoints=web,websecure"
-      - "traefik.http.routers.prisma-web.tls=true"
-      - "traefik.http.routers.prisma-web.service=prisma-web"
-      - "traefik.http.services.prisma-web.loadbalancer.server.port=80"
+    - "traefik.http.routers.prisma-web.rule=Host(`41tech-prisma.phy3nf.easypanel.host`)"
+    - "traefik.http.routers.prisma-web.tls=true"
+    - "traefik.http.routers.prisma-web.priority=1"
+
+    - "traefik.http.services.prisma-web.loadbalancer.server.port=80"
+
