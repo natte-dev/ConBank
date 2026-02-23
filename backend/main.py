@@ -1,11 +1,13 @@
 """
 API FastAPI para o sistema de conciliação de fornecedores
 """
+import os
+import signal
+import sys
+
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -26,24 +28,12 @@ from consolidador import (
     consolidar_todos_fornecedores
 )
 
-FRONT_DIR = Path(__file__).resolve().parent / "frontend"
+# CORS: em produção, definir ALLOWED_ORIGINS com as origens reais
+# Ex: ALLOWED_ORIGINS="https://meuapp.easypanel.host,https://outro.com"
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+CORS_ORIGINS: list = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-app = FastAPI()
-
-app.mount(
-    "/assets", 
-    StaticFiles(directory=str(FRONT_DIR / "assets"), check_dir=False),
-    name="assets",
-)
-
-@app.get("/")
-async def spa_index():
-    index = FRONT_DIR / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return {"message": "Frontend não encontrado"}
-
-# Criar aplicação
+# Criar aplicação (única instância)
 app = FastAPI(
     title="Sistema de Conciliação de Fornecedores",
     description="API para conciliação interna de contas a pagar",
@@ -53,7 +43,7 @@ app = FastAPI(
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -79,13 +69,13 @@ async def root():
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    """Health check"""
+    """Health check — verifica conectividade com o banco"""
     try:
-        # Testar conexão com o banco
-        db.execute("SELECT 1")
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        raise HTTPException(status_code=503, detail={"status": "unhealthy", "error": str(e)})
 
 
 # ==================== UPLOAD E PROCESSAMENTO ====================

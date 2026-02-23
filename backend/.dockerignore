@@ -1,0 +1,32 @@
+# Python
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+htmlcov
+.coverage
+
+# Venv
+venv/
+env/
+.venv/
+.env
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Documentação
+*.md
+
+# Git
+.git/
+.gitignore

@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+.vite/
+.eslintcache
+coverage/
+
+# Env
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log

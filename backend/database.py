@@ -3,11 +3,17 @@ Configuração do banco de dados
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 import os
 
-# URL do banco de dados
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:b2ad156f04d4203f02f3@n8n_postgres:5432/conbank")
+# URL do banco de dados — DEVE ser definida via variável de ambiente em produção
+# Formato: postgresql://usuario:senha@host:porta/database
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "Variável de ambiente DATABASE_URL não definida. "
+        "Exemplo: postgresql://user:pass@host:5432/conbank"
+    )
 
 # Criar engine
 engine = create_engine(

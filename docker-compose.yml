@@ -1,51 +1,82 @@
+# =============================================================================
+# docker-compose.yml — conBank
+# Uso em produção: EasyPanel gerencia via Traefik (labels abaixo)
+# Uso local:       docker compose up --build
+# =============================================================================
+
 networks:
   easypanel:
     external: true
     name: easypanel
 
 services:
+
+  # ---------------------------------------------------------------------------
+  # BACKEND — FastAPI + Uvicorn
+  # ---------------------------------------------------------------------------
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      - NODE_ENV=production
-      - PORT=8000
+      - DATABASE_URL=${DATABASE_URL}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - PORT=${PORT:-8000}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
     expose:
-      - "8000"
+      - "${PORT:-8000}"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     networks:
       - easypanel
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=easypanel"
+      # Rota /api/* → backend (strip do prefixo /api)
+      - "traefik.http.routers.conbank-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.conbank-api.tls=true"
+      - "traefik.http.routers.conbank-api.priority=100"
+      - "traefik.http.routers.conbank-api.middlewares=conbank-stripapi"
+      - "traefik.http.middlewares.conbank-stripapi.stripprefix.prefixes=/api"
+      - "traefik.http.services.conbank-api.loadbalancer.server.port=${PORT:-8000}"
 
-      - "traefik.http.routers.prisma-api.rule=Host(`41tech-prisma.phy3nf.easypanel.host`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.prisma-api.tls=true"
-      - "traefik.http.routers.prisma-api.priority=100"
-
-      - "traefik.http.routers.prisma-api.middlewares=prisma-stripapi"
-      - "traefik.http.middlewares.prisma-stripapi.stripprefix.prefixes=/api"
-
-      - "traefik.http.services.prisma-api.loadbalancer.server.port=8000"
-
-
+  # ---------------------------------------------------------------------------
+  # FRONTEND — React + Nginx (build estático)
+  # ---------------------------------------------------------------------------
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    environment:
-      - NODE_ENV=production
+      args:
+        # URL base da API vista pelo navegador.
+        # Vazio = frontend usa caminho relativo /api/* (recomendado com proxy Nginx/Traefik)
+        VITE_API_ORIGIN: ""
     expose:
       - "80"
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - easypanel
     labels:
-    - "traefik.enable=true"
-    - "traefik.docker.network=easypanel"
-
-    - "traefik.http.routers.prisma-web.rule=Host(`41tech-prisma.phy3nf.easypanel.host`)"
-    - "traefik.http.routers.prisma-web.tls=true"
-    - "traefik.http.routers.prisma-web.priority=1"
-
-    - "traefik.http.services.prisma-web.loadbalancer.server.port=80"
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      # Rota raiz → frontend
+      - "traefik.http.routers.conbank-web.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.conbank-web.tls=true"
+      - "traefik.http.routers.conbank-web.priority=1"
+      - "traefik.http.services.conbank-web.loadbalancer.server.port=80"
 
