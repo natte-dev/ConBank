@@ -19,11 +19,11 @@ services:
   backend:
     # Override: sem labels Traefik, porta exposta diretamente para testes
     ports:
-      - "8000:8000"
+      - "8008:8008"
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql://conbank:conbank@db:5432/conbank}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}
-      - PORT=8000
+      - PORT=8008
       - ENVIRONMENT=development
     depends_on:
       db:
