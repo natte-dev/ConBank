@@ -2,14 +2,15 @@
 API FastAPI para o sistema de conciliação de fornecedores
 """
 import os
-import signal
-import sys
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
 import io
 
@@ -19,25 +20,40 @@ from models import (
     ConciliacaoInterna, Divergencia
 )
 from parser import parsear_arquivo_razao, calcular_hash_arquivo
-
 from decimal import Decimal
 from conciliacao_intel import conciliar_todos_fornecedores_inteligente
-
 from consolidador import (
     consolidar_lancamentos_fornecedor,
     consolidar_todos_fornecedores
 )
 
-# CORS: em produção, definir ALLOWED_ORIGINS com as origens reais
-# Ex: ALLOWED_ORIGINS="https://meuapp.easypanel.host,https://outro.com"
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CORS — configurável por env em produção
+# Ex: ALLOWED_ORIGINS="https://meuapp.easypanel.host"
+# ---------------------------------------------------------------------------
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
 CORS_ORIGINS: list = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-# Criar aplicação (única instância)
+
+# ---------------------------------------------------------------------------
+# Lifespan — substitui @app.on_event("startup") depreciado no FastAPI >= 0.93
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    logger.info("✅ Banco de dados inicializado")
+    yield
+    # shutdown — SQLAlchemy cuida do pool automaticamente
+
+
+# Criar aplicação — única instância com lifespan
 app = FastAPI(
     title="Sistema de Conciliação de Fornecedores",
     description="API para conciliação interna de contas a pagar",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Configurar CORS
@@ -48,13 +64,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Inicializa o banco de dados na inicialização"""
-    init_db()
-    print("✅ Banco de dados inicializado")
 
 
 @app.get("/")
@@ -69,13 +78,15 @@ async def root():
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    """Health check — verifica conectividade com o banco"""
+    """Health check — verifica conectividade com o banco (SQLAlchemy 2.x)"""
     try:
-        from sqlalchemy import text
         db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail={"status": "unhealthy", "error": str(e)})
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unhealthy", "error": str(e)}
+        )
 
 
 # ==================== UPLOAD E PROCESSAMENTO ====================
@@ -457,7 +468,7 @@ async def listar_divergencias(
     """Lista todas as divergências encontradas"""
     divergencias = db.query(Divergencia).join(Fornecedor).filter(
         Fornecedor.arquivo_origem_id == arquivo_id,
-        Divergencia.resolvido == False
+        Divergencia.resolvido.is_(False)
     ).all()
     
     return [{
@@ -474,7 +485,7 @@ async def listar_divergencias(
 @app.get("/export/excel/{arquivo_id}")
 async def exportar_excel(
     arquivo_id: int,
-    tipo: str = Query("completo", regex="^(completo|em_aberto|divergencias)$"),
+    tipo: str = Query("completo", pattern="^(completo|em_aberto|divergencias)$"),
     db: Session = Depends(get_db)
 ):
     """Exporta dados para Excel"""

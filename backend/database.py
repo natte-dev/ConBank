@@ -1,11 +1,11 @@
 """
 Configuração do banco de dados
 """
+import os
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException
-import os
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -13,31 +13,32 @@ logger = logging.getLogger(__name__)
 # DATABASE_URL — obrigatória em produção, lida de variável de ambiente.
 # Formato: postgresql://usuario:senha@host:porta/database
 #
-# NÃO colocar valor default com credenciais aqui.
-# Configure no EasyPanel → Environment → DATABASE_URL
+# Configure no EasyPanel → seu projeto → Environment → DATABASE_URL
 # ---------------------------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
 if not DATABASE_URL:
-    # Log claro para aparecer nos logs do EasyPanel
     logger.error(
-        "DATABASE_URL não definida! "
-        "Configure em: EasyPanel → seu projeto → Environment → DATABASE_URL\n"
-        "Formato: postgresql://usuario:senha@host:5432/conbank"
+        "DATABASE_URL não definida! O backend vai subir mas o banco não funcionará.\n"
+        "Configure: EasyPanel → Environment → DATABASE_URL\n"
+        "Formato:   postgresql://usuario:senha@host:5432/conbank"
     )
-    # Não levanta RuntimeError aqui para não impedir o uvicorn de subir
-    # O erro será reportado via /health quando o banco for acessado
 
-# Engine criada com lazy connect (só conecta de fato quando executar query)
+# ---------------------------------------------------------------------------
+# Engine — criada de forma lazy (só conecta ao banco quando executar a 1ª query)
+# pool_pre_ping: descarta conexões mortas automaticamente
+# pool_size / max_overflow: dimensionado para uvicorn single-worker
+# ---------------------------------------------------------------------------
+_engine_url = DATABASE_URL or "postgresql+psycopg2://noop:noop@localhost/noop"
+
 engine = create_engine(
-    DATABASE_URL or "postgresql://placeholder:placeholder@localhost/placeholder",
-    pool_pre_ping=True,   # re-testa conexão antes de usar do pool
+    _engine_url,
+    pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
     echo=False,
 )
 
-# Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -46,7 +47,7 @@ def get_db():
     if not DATABASE_URL:
         raise HTTPException(
             status_code=503,
-            detail="Banco de dados não configurado. Defina DATABASE_URL no ambiente."
+            detail="Banco de dados não configurado. Defina DATABASE_URL no ambiente.",
         )
     db = SessionLocal()
     try:
@@ -55,11 +56,11 @@ def get_db():
         db.close()
 
 
-def init_db():
-    """Cria todas as tabelas (idempotente — não apaga dados existentes)."""
+def init_db() -> None:
+    """Cria todas as tabelas (idempotente — nunca apaga dados existentes)."""
     if not DATABASE_URL:
         logger.warning("init_db ignorado: DATABASE_URL não configurada.")
         return
     from models import Base
     Base.metadata.create_all(bind=engine)
-    logger.info("Banco de dados inicializado (tabelas verificadas/criadas).")
+    logger.info("Tabelas verificadas/criadas com sucesso.")
