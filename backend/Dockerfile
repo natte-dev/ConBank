@@ -5,7 +5,7 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Dependências de sistema para compilar psycopg2, Levenshtein etc.
+# gcc + libpq-dev necessários para compilar psycopg2 e python-Levenshtein
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -21,29 +21,30 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Apenas libpq em runtime (para psycopg2-binary não precisa, mas é boa prática)
+# libpq5 para psycopg2 em runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar pacotes instalados do builder
+# Pacotes Python do builder
 COPY --from=builder /install /usr/local
 
-# Copiar código da aplicação
+# Código da aplicação
 COPY . .
 
-# Usuário não-root para segurança
+# Usuário não-root
 RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Porta configurável via env (default 8000)
+# Porta padrão (sobrescrita por env PORT no compose/EasyPanel)
 ENV PORT=8000
 
 EXPOSE 8000
 
-# Healthcheck interno do container
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health')" || exit 1
+# HEALTHCHECK — usa sh -c para expandir $PORT corretamente em runtime
+# start-period de 60s dá tempo ao uvicorn + DB conectar antes do primeiro check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD sh -c "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:$PORT/health')\"" || exit 1
 
-# Graceful shutdown: uvicorn já trata SIGTERM
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 75"]
+# CMD via sh para que $PORT seja expandido pelo shell
+CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 75"]

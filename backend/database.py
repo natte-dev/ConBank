@@ -3,23 +3,38 @@ Configuração do banco de dados
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from fastapi import HTTPException
 import os
+import logging
 
-# URL do banco de dados — DEVE ser definida via variável de ambiente em produção
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# DATABASE_URL — obrigatória em produção, lida de variável de ambiente.
 # Formato: postgresql://usuario:senha@host:porta/database
-DATABASE_URL = os.getenv("DATABASE_URL")
+#
+# NÃO colocar valor default com credenciais aqui.
+# Configure no EasyPanel → Environment → DATABASE_URL
+# ---------------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 if not DATABASE_URL:
-    raise RuntimeError(
-        "Variável de ambiente DATABASE_URL não definida. "
-        "Exemplo: postgresql://user:pass@host:5432/conbank"
+    # Log claro para aparecer nos logs do EasyPanel
+    logger.error(
+        "DATABASE_URL não definida! "
+        "Configure em: EasyPanel → seu projeto → Environment → DATABASE_URL\n"
+        "Formato: postgresql://usuario:senha@host:5432/conbank"
     )
+    # Não levanta RuntimeError aqui para não impedir o uvicorn de subir
+    # O erro será reportado via /health quando o banco for acessado
 
-# Criar engine
+# Engine criada com lazy connect (só conecta de fato quando executar query)
 engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    echo=False
+    DATABASE_URL or "postgresql://placeholder:placeholder@localhost/placeholder",
+    pool_pre_ping=True,   # re-testa conexão antes de usar do pool
+    pool_size=5,
+    max_overflow=10,
+    echo=False,
 )
 
 # Session factory
@@ -27,7 +42,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
-    """Dependency para obter sessão do banco"""
+    """FastAPI dependency — fornece sessão de banco e fecha ao final."""
+    if not DATABASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail="Banco de dados não configurado. Defina DATABASE_URL no ambiente."
+        )
     db = SessionLocal()
     try:
         yield db
@@ -36,6 +56,10 @@ def get_db():
 
 
 def init_db():
-    """Inicializa o banco de dados criando todas as tabelas"""
+    """Cria todas as tabelas (idempotente — não apaga dados existentes)."""
+    if not DATABASE_URL:
+        logger.warning("init_db ignorado: DATABASE_URL não configurada.")
+        return
     from models import Base
     Base.metadata.create_all(bind=engine)
+    logger.info("Banco de dados inicializado (tabelas verificadas/criadas).")

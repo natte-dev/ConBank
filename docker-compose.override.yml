@@ -1,0 +1,58 @@
+# =============================================================================
+# docker-compose.override.yml — Desenvolvimento LOCAL
+# Este arquivo sobrescreve o docker-compose.yml apenas quando você rodar
+# localmente (sem EasyPanel).
+#
+# Uso: docker compose up --build
+#      (o override é carregado automaticamente pelo docker compose)
+#
+# O EasyPanel NÃO usa este arquivo — ele usa apenas docker-compose.yml
+# =============================================================================
+
+networks:
+  easypanel:
+    # Em desenvolvimento local, criamos a rede internamente (não precisa ser externa)
+    external: false
+    name: easypanel
+
+services:
+  backend:
+    # Override: sem labels Traefik, porta exposta diretamente para testes
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://conbank:conbank@db:5432/conbank}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}
+      - PORT=8000
+      - ENVIRONMENT=development
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    # Override: sem labels Traefik, porta exposta diretamente
+    ports:
+      - "80:80"
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL LOCAL — apenas para desenvolvimento, não vai para EasyPanel
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: conbank
+      POSTGRES_USER: conbank
+      POSTGRES_PASSWORD: conbank
+    volumes:
+      - pgdata_local:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U conbank -d conbank"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "5432:5432"   # Acesso externo para ferramentas como DBeaver/pgAdmin
+
+volumes:
+  pgdata_local:

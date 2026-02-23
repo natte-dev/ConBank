@@ -1,7 +1,11 @@
 # =============================================================================
 # docker-compose.yml — conBank
-# Uso em produção: EasyPanel gerencia via Traefik (labels abaixo)
-# Uso local:       docker compose up --build
+# Uso em produção: EasyPanel (define as env vars no painel)
+# Uso local:       docker compose --env-file .env up --build
+#
+# VARIÁVEIS OBRIGATÓRIAS no EasyPanel / .env:
+#   DATABASE_URL  → postgresql://user:pass@host:5432/dbname
+#   DOMAIN        → seu-dominio.easypanel.host
 # =============================================================================
 
 networks:
@@ -24,27 +28,31 @@ services:
       - PORT=${PORT:-8000}
       - ENVIRONMENT=${ENVIRONMENT:-production}
     expose:
-      - "${PORT:-8000}"
+      - "8000"
     restart: unless-stopped
+    # start_period generoso: aguarda uvicorn subir + banco aceitar conexões
+    # O frontend só sobe depois que o backend passar no healthcheck
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
+      test:
+        - "CMD"
+        - "sh"
+        - "-c"
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""
+      interval: 20s
       timeout: 10s
-      retries: 3
-      start_period: 20s
+      retries: 5
+      start_period: 60s
     networks:
       - easypanel
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=easypanel"
-      # Rota /api/* → backend (strip do prefixo /api)
       - "traefik.http.routers.conbank-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
       - "traefik.http.routers.conbank-api.tls=true"
       - "traefik.http.routers.conbank-api.priority=100"
       - "traefik.http.routers.conbank-api.middlewares=conbank-stripapi"
       - "traefik.http.middlewares.conbank-stripapi.stripprefix.prefixes=/api"
-      - "traefik.http.services.conbank-api.loadbalancer.server.port=${PORT:-8000}"
+      - "traefik.http.services.conbank-api.loadbalancer.server.port=8000"
 
   # ---------------------------------------------------------------------------
   # FRONTEND — React + Nginx (build estático)
@@ -54,8 +62,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # URL base da API vista pelo navegador.
-        # Vazio = frontend usa caminho relativo /api/* (recomendado com proxy Nginx/Traefik)
         VITE_API_ORIGIN: ""
     expose:
       - "80"
@@ -68,13 +74,12 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     networks:
       - easypanel
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=easypanel"
-      # Rota raiz → frontend
       - "traefik.http.routers.conbank-web.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.conbank-web.tls=true"
       - "traefik.http.routers.conbank-web.priority=1"
