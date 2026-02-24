@@ -1,11 +1,12 @@
-# Dependencias � reinstaladas no build
+# Dependencias � reinstaladas no build
 node_modules/
 dist/
 .vite/
 
-# Secrets
+# Secrets — manter .env.production (URL pública, lida pelo Vite no build)
 .env
-.env.*
+.env.local
+.env.*.local
 
 # IDE / Git
 .vscode/
