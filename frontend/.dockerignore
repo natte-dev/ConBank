@@ -1,22 +1,18 @@
-# Node
+# Dependencias — reinstaladas no build
 node_modules/
 dist/
 .vite/
-.eslintcache
-coverage/
 
-# Env
+# Secrets
 .env
 .env.*
 
-# IDE
+# IDE / Git
 .vscode/
 .idea/
 *.swp
-
-# Git
 .git/
 .gitignore
 
-# Logs
-*.log
+# Desnecessario no build/runtime
+*.md

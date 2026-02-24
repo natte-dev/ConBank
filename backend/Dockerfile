@@ -1,50 +1,65 @@
-# ============================================================
-# Stage 1: Builder — instala dependências com build tools
-# ============================================================
+# =============================================================================
+# backend/Dockerfile — conBank API (FastAPI + Uvicorn)
+# Deploy: EasyPanel → App → Dockerfile
+# Build context: ./backend
+# Porta interna: 8000
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: builder — compila dependências nativas (psycopg2, Levenshtein)
+# -----------------------------------------------------------------------------
 FROM python:3.11-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# gcc + libpq-dev necessários para compilar psycopg2 e python-Levenshtein
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
+        gcc \
+        libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ============================================================
-# Stage 2: Runtime — imagem enxuta
-# ============================================================
+# -----------------------------------------------------------------------------
+# Stage 2: runtime — imagem final enxuta
+# -----------------------------------------------------------------------------
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# libpq5 para psycopg2 em runtime
+# Apenas libpq em runtime (psycopg2-binary já linka dinamicamente)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
+        libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Pacotes Python do builder
+# Pacotes Python instalados no builder
 COPY --from=builder /install /usr/local
 
-# Código da aplicação
+# Código-fonte
 COPY . .
 
-# Usuário não-root
-RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+# Usuário não-root para segurança
+RUN useradd -m -u 1001 appuser \
+    && chown -R appuser:appuser /app
 USER appuser
-
-# Porta padrão (sobrescrita por env PORT no compose/EasyPanel)
-ENV PORT=8000
 
 EXPOSE 8000
 
-# HEALTHCHECK — usa sh -c para expandir $PORT corretamente em runtime
-# start-period de 60s dá tempo ao uvicorn + DB conectar antes do primeiro check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD sh -c "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:$PORT/health')\"" || exit 1
+# Healthcheck: bate em /health — sem sh -c para evitar ambiguidade
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=10s \
+    --start-period=60s \
+    --retries=5 \
+  CMD python -c \
+    "import urllib.request, sys; \
+     r = urllib.request.urlopen('http://localhost:8000/health', timeout=8); \
+     sys.exit(0 if r.status == 200 else 1)"
 
-# CMD via sh para que $PORT seja expandido pelo shell
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 75"]
+# CMD com exec-form (sem shell) — uvicorn recebe SIGTERM diretamente
+CMD ["python", "-m", "uvicorn", "main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--timeout-keep-alive", "75", \
+     "--log-level", "info"]

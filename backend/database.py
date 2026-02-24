@@ -1,38 +1,35 @@
 """
-Configuração do banco de dados
+Configuração do banco de dados — SQLAlchemy 2.x
 """
 import os
 import logging
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# DATABASE_URL — obrigatória em produção, lida de variável de ambiente.
-# Formato: postgresql://usuario:senha@host:porta/database
-#
-# Configure no EasyPanel → seu projeto → Environment → DATABASE_URL
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# DATABASE_URL — obrigatória em produção.
+# Configure no EasyPanel → App → Environment → DATABASE_URL
+# Formato: postgresql://usuario:senha@host:5432/nome_do_banco
+# -----------------------------------------------------------------------------
 DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
 if not DATABASE_URL:
     logger.error(
-        "DATABASE_URL não definida! O backend vai subir mas o banco não funcionará.\n"
-        "Configure: EasyPanel → Environment → DATABASE_URL\n"
-        "Formato:   postgresql://usuario:senha@host:5432/conbank"
+        "\n"
+        "╔══════════════════════════════════════════════════════════╗\n"
+        "║  ERRO: DATABASE_URL não definida!                        ║\n"
+        "║  Configure no EasyPanel → App → Environment              ║\n"
+        "║  Formato: postgresql://user:pass@host:5432/conbank        ║\n"
+        "╚══════════════════════════════════════════════════════════╝"
     )
 
-# ---------------------------------------------------------------------------
-# Engine — criada de forma lazy (só conecta ao banco quando executar a 1ª query)
-# pool_pre_ping: descarta conexões mortas automaticamente
-# pool_size / max_overflow: dimensionado para uvicorn single-worker
-# ---------------------------------------------------------------------------
-_engine_url = DATABASE_URL or "postgresql+psycopg2://noop:noop@localhost/noop"
-
+# Engine com pool configurado para single-worker (uvicorn --workers 1)
+# pool_pre_ping: testa a conexão antes de usá-la (detecta reconexão após idle)
 engine = create_engine(
-    _engine_url,
+    DATABASE_URL or "postgresql+psycopg2://noop:noop@localhost/noop",
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
@@ -43,13 +40,16 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
-    """FastAPI dependency — fornece sessão de banco e fecha ao final."""
+    """
+    FastAPI dependency — abre sessão e garante fechamento ao fim da request.
+    Levanta 503 imediatamente se DATABASE_URL não estiver configurada.
+    """
     if not DATABASE_URL:
         raise HTTPException(
             status_code=503,
-            detail="Banco de dados não configurado. Defina DATABASE_URL no ambiente.",
+            detail="Banco de dados não configurado. Defina DATABASE_URL.",
         )
-    db = SessionLocal()
+    db: Session = SessionLocal()
     try:
         yield db
     finally:
@@ -57,10 +57,20 @@ def get_db():
 
 
 def init_db() -> None:
-    """Cria todas as tabelas (idempotente — nunca apaga dados existentes)."""
+    """
+    Cria todas as tabelas declaradas nos models (idempotente — usa CREATE IF NOT EXISTS).
+    Chamado no startup do FastAPI via lifespan.
+    Silencioso se DATABASE_URL não estiver definida.
+    """
     if not DATABASE_URL:
         logger.warning("init_db ignorado: DATABASE_URL não configurada.")
         return
+
     from models import Base
     Base.metadata.create_all(bind=engine)
-    logger.info("Tabelas verificadas/criadas com sucesso.")
+
+    # Valida que a conexão realmente funciona
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+    logger.info("✅ Banco de dados: tabelas verificadas/criadas, conexão OK.")

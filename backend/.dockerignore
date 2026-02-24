@@ -1,32 +1,29 @@
 # Python
-__pycache__
-**/__pycache__
+__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
-*.pyd
-.pytest_cache
-.mypy_cache
-htmlcov
-.coverage
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
 
-# Venv
+# Secrets
+.env
+.env.*
+
+# Virtualenv
 venv/
 env/
 .venv/
-.env
-*.egg-info/
 
-# IDE
+# IDE / Git
 .vscode/
 .idea/
 *.swp
-
-# Logs
-*.log
-
-# Documentação
-*.md
-
-# Git
 .git/
 .gitignore
+
+# Desnecessario no runtime
+*.md
+backup/
+documents/

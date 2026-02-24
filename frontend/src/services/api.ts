@@ -1,14 +1,17 @@
 import axios from 'axios';
 
-const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || '';
-
-if (!API_ORIGIN) {
-  console.warn('VITE_API_ORIGIN não definido no build do frontend');
-}
+// VITE_API_URL é injetado em tempo de build pelo Vite.
+// Configure no EasyPanel → App (frontend) → Build Args:
+//   VITE_API_URL=https://seu-backend.easypanel.host
+// Se vazio, o axios usa caminhos relativos (frontend e backend no mesmo domínio).
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
 export const api = axios.create({
-  baseURL: API_ORIGIN,
+  baseURL: API_BASE_URL,
+  timeout: 120_000, // 2 min — uploads de PDF podem demorar
 });
+
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
 export interface Arquivo {
   id: number;
@@ -96,83 +99,66 @@ export interface ListaFornecedoresResponse {
   total?: number;
 }
 
+// ─── Serviços ─────────────────────────────────────────────────────────────────
+
 export const apiService = {
-  // Upload de arquivo
+
   uploadArquivo: async (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    const response = await api.post('/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+    const form = new FormData();
+    form.append('file', file);
+    const { data } = await api.post('/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
-    return response.data;
-  },
-
-  // Listar arquivos
-  listarArquivos: async (): Promise<Arquivo[]> => {
-    const response = await api.get('/arquivos');
-    return response.data;
-  },
-
-  // Obter resumo
-  obterResumo: async (arquivoId: number): Promise<Resumo> => {
-    const response = await api.get(`/resumo/${arquivoId}`);
-    return response.data;
-  },
-
-  // Listar fornecedores
-  listarFornecedores: async (
-    arquivoId: number,
-    status?: string,
-    skip: number = 0,
-    limit: number = 100
-  ): Promise<ListaFornecedoresResponse> => {
-    const response = await api.get('/fornecedores', {
-      params: { arquivo_id: arquivoId, status, skip, limit },
-    });
-
-    const data = response.data;
-
-    // Se veio array direto, embrulha
-    if (Array.isArray(data)) {
-      return { fornecedores: data };
-    }
-
-    // Se já veio no formato esperado, retorna como está
     return data;
   },
 
-  // Obter fornecedor detalhado
-  obterFornecedorDetalhado: async (fornecedorId: number): Promise<FornecedorDetalhado> => {
-    const response = await api.get(`/fornecedores/${fornecedorId}`);
-    return response.data;
+  listarArquivos: async (): Promise<Arquivo[]> => {
+    const { data } = await api.get('/arquivos');
+    return data;
   },
 
-  // Listar divergências
+  obterResumo: async (arquivoId: number): Promise<Resumo> => {
+    const { data } = await api.get(`/resumo/${arquivoId}`);
+    return data;
+  },
+
+  listarFornecedores: async (
+    arquivoId: number,
+    status?: string,
+    skip = 0,
+    limit = 100,
+  ): Promise<ListaFornecedoresResponse> => {
+    const { data } = await api.get('/fornecedores', {
+      params: { arquivo_id: arquivoId, status, skip, limit },
+    });
+    return Array.isArray(data) ? { fornecedores: data } : data;
+  },
+
+  obterFornecedorDetalhado: async (fornecedorId: number): Promise<FornecedorDetalhado> => {
+    const { data } = await api.get(`/fornecedores/${fornecedorId}`);
+    return data;
+  },
+
   listarDivergencias: async (arquivoId: number): Promise<Divergencia[]> => {
-    const response = await api.get('/divergencias', {
+    const { data } = await api.get('/divergencias', {
       params: { arquivo_id: arquivoId },
     });
-    return response.data;
+    return data;
   },
 
-  // Exportar para Excel
   exportarExcel: async (arquivoId: number, tipo: 'completo' | 'em_aberto' | 'divergencias') => {
-    const response = await api.get(`/export/excel/${arquivoId}`, {
+    const { data } = await api.get(`/export/excel/${arquivoId}`, {
       params: { tipo },
       responseType: 'blob',
     });
-    
-    // Criar link para download
-    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const url  = window.URL.createObjectURL(new Blob([data]));
     const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `conciliacao_fornecedores_${tipo}.xlsx`);
+    link.href  = url;
+    link.setAttribute('download', `conciliacao_${tipo}.xlsx`);
     document.body.appendChild(link);
     link.click();
     link.remove();
+    window.URL.revokeObjectURL(url);
   },
 };
 
