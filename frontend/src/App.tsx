@@ -832,8 +832,8 @@ function App() {
             {/* <img src="/logo.png" alt="Logo 41 Contábil" className="logo" /> */}
 
             <div className="header-text">
-              <h1>41 Contábil - Conciliador Bancário</h1>
-              <p>ConcilPro</p>
+              <h1>ConcilPro</h1>
+              <p>Conciliador Bancário</p>
             </div>
 
             <button
