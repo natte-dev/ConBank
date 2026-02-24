@@ -833,7 +833,7 @@ function App() {
 
             <div className="header-text">
               <h1>41 Contábil - Conciliador Bancário</h1>
-              <p>ConBank</p>
+              <p>ConcilPro</p>
             </div>
 
             <button
