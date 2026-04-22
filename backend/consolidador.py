@@ -140,19 +140,22 @@ def consolidar_todos_fornecedores(dados_parser: Dict) -> Dict:
         # Atualizar fornecedor
         fornecedor['lancamentos'] = lancamentos_consolidados
         
-        # Somar TODOS os valores (independente de tipo_operacao para não perder
-        # lançamentos com classificação genérica como DEBITO/CREDITO/OUTRO)
-        total_credito = sum(
-            Decimal(str(l.get('valor_credito', 0)))
-            for l in lancamentos_consolidados
-        )
-        total_debito = sum(
-            Decimal(str(l.get('valor_debito', 0)))
-            for l in lancamentos_consolidados
-        )
+        # Preservar totais do "Total da conta:" se já foram parseados pelo IA/regex.
+        # Só recomputa se os totais vieram zerados (PDF sem linha de total).
+        parsed_credito = Decimal(str(fornecedor.get('total_credito') or 0))
+        parsed_debito  = Decimal(str(fornecedor.get('total_debito')  or 0))
 
-        fornecedor['total_credito'] = float(total_credito)
-        fornecedor['total_debito'] = float(total_debito)
+        if parsed_credito == 0:
+            parsed_credito = sum(
+                Decimal(str(l.get('valor_credito', 0))) for l in lancamentos_consolidados
+            )
+            fornecedor['total_credito'] = float(parsed_credito)
+
+        if parsed_debito == 0:
+            parsed_debito = sum(
+                Decimal(str(l.get('valor_debito', 0))) for l in lancamentos_consolidados
+            )
+            fornecedor['total_debito'] = float(parsed_debito)
         
         # Informação de quantos foram consolidados
         qtd_original = len(lancamentos_originais)

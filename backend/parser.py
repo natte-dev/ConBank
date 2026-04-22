@@ -587,19 +587,17 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
             lancamentos.append(normalizado)
 
     if not lancamentos:
-        logger.warning(
-            "⚠️ IA retornou %d lançamentos brutos mas nenhum normalizou corretamente. "
-            "Primeiro item bruto: %s",
-            len(dados_ia.get("lancamentos", [])),
-            dados_ia.get("lancamentos", [{}])[0] if dados_ia.get("lancamentos") else "vazio",
+        brutos = dados_ia.get("lancamentos", [])
+        print(
+            f"⚠️ IA: {len(brutos)} lançamentos brutos mas nenhum normalizou. "
+            f"Primeiro: {brutos[0] if brutos else 'vazio'}"
         )
         return None
 
-    logger.info(
-        "✅ IA parseou bloco: %d lançamentos, débito=%.2f, crédito=%.2f",
-        len(lancamentos),
-        float(dados_ia.get("total_debito") or 0),
-        float(dados_ia.get("total_credito") or 0),
+    print(
+        f"✅ IA parseou bloco: {len(lancamentos)} lançamentos, "
+        f"débito={float(dados_ia.get('total_debito') or 0):.2f}, "
+        f"crédito={float(dados_ia.get('total_credito') or 0):.2f}"
     )
 
     return {

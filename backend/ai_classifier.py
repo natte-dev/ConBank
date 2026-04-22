@@ -145,16 +145,14 @@ def parsear_bloco_fornecedor_ia(bloco_texto: str) -> Optional[dict]:
 
         usage = response.usage
         n_lanc = len(data.get("lancamentos", []))
-        logger.info(
-            "🤖 IA respondeu: %d lançamentos | débito=%s | crédito=%s | tokens: %d in/%d out",
-            n_lanc,
-            data.get("total_debito"),
-            data.get("total_credito"),
-            usage.prompt_tokens if usage else 0,
-            usage.completion_tokens if usage else 0,
+        print(
+            f"🤖 IA respondeu: {n_lanc} lançamentos | "
+            f"débito={data.get('total_debito')} | crédito={data.get('total_credito')} | "
+            f"tokens: {usage.prompt_tokens if usage else 0} in/"
+            f"{usage.completion_tokens if usage else 0} out"
         )
         if n_lanc > 0:
-            logger.info("   Primeiro lançamento bruto: %s", data["lancamentos"][0])
+            print(f"   Primeiro lançamento bruto: {data['lancamentos'][0]}")
         return data
 
     except Exception as exc:
