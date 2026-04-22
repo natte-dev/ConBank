@@ -140,19 +140,17 @@ def consolidar_todos_fornecedores(dados_parser: Dict) -> Dict:
         # Atualizar fornecedor
         fornecedor['lancamentos'] = lancamentos_consolidados
         
-        # Recalcular totais (não mudam, mas por garantia)
+        # Somar TODOS os valores (independente de tipo_operacao para não perder
+        # lançamentos com classificação genérica como DEBITO/CREDITO/OUTRO)
         total_credito = sum(
-            Decimal(str(l.get('valor_credito', 0))) 
-            for l in lancamentos_consolidados 
-            if l.get('tipo_operacao') == 'COMPRA'
+            Decimal(str(l.get('valor_credito', 0)))
+            for l in lancamentos_consolidados
         )
-        
         total_debito = sum(
-            Decimal(str(l.get('valor_debito', 0))) 
-            for l in lancamentos_consolidados 
-            if l.get('tipo_operacao') == 'PAGAMENTO'
+            Decimal(str(l.get('valor_debito', 0)))
+            for l in lancamentos_consolidados
         )
-        
+
         fornecedor['total_credito'] = float(total_credito)
         fornecedor['total_debito'] = float(total_debito)
         

@@ -677,6 +677,12 @@ def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
         if fornecedor:
             fornecedores.append(fornecedor)
             blocos_regex += 1
+        else:
+            logger.warning(
+                "⚠️ Bloco descartado (IA e regex falharam): %d linhas | primeiras: %s",
+                len(linhas_bloco),
+                linhas_bloco[:3],
+            )
 
     for linha in linhas:
         linha = linha.strip()
