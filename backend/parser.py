@@ -486,16 +486,51 @@ def consolidar_fornecedores_duplicados(fornecedores: List[Dict]) -> List[Dict]:
     return fornecedores_consolidados
 
 
+def _ia_decimal(val) -> Decimal:
+    """Converte valor retornado pela IA para Decimal.
+    Aceita float/int nativos do JSON ou strings em formato brasileiro ('1.234,56').
+    """
+    if val is None:
+        return Decimal("0")
+    if isinstance(val, (int, float)):
+        return Decimal(str(val))
+    s = str(val).strip().replace(" ", "")
+    try:
+        return Decimal(s)
+    except Exception:
+        # Tenta formato brasileiro: "1.234,56" → "1234.56"
+        s = s.replace(".", "").replace(",", ".")
+        try:
+            return Decimal(s)
+        except Exception:
+            return Decimal("0")
+
+
+def _ia_data(val) -> Optional[datetime]:
+    """Converte data retornada pela IA para datetime.
+    Aceita DD/MM/YYYY (brasileiro) e YYYY-MM-DD (ISO).
+    """
+    if not val:
+        return None
+    s = str(val).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _normalizar_lancamento_ia(lanc_ia: dict) -> Optional[Dict]:
     """Converte um lançamento retornado pelo GPT para o formato interno do parser."""
     try:
-        data = parse_data(str(lanc_ia.get("data", "")))
+        data = _ia_data(lanc_ia.get("data"))
         if not data:
             return None
 
-        vd = Decimal(str(lanc_ia.get("valor_debito") or 0))
-        vc = Decimal(str(lanc_ia.get("valor_credito") or 0))
-        saldo = Decimal(str(lanc_ia.get("saldo_apos") or 0))
+        vd = _ia_decimal(lanc_ia.get("valor_debito"))
+        vc = _ia_decimal(lanc_ia.get("valor_credito"))
+        saldo = _ia_decimal(lanc_ia.get("saldo_apos"))
         historico = (lanc_ia.get("historico") or "").strip()
         cpc = lanc_ia.get("conta_partida")
         cpc = str(cpc).strip() if cpc else None
@@ -552,16 +587,29 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
             lancamentos.append(normalizado)
 
     if not lancamentos:
+        logger.warning(
+            "⚠️ IA retornou %d lançamentos brutos mas nenhum normalizou corretamente. "
+            "Primeiro item bruto: %s",
+            len(dados_ia.get("lancamentos", [])),
+            dados_ia.get("lancamentos", [{}])[0] if dados_ia.get("lancamentos") else "vazio",
+        )
         return None
+
+    logger.info(
+        "✅ IA parseou bloco: %d lançamentos, débito=%.2f, crédito=%.2f",
+        len(lancamentos),
+        float(dados_ia.get("total_debito") or 0),
+        float(dados_ia.get("total_credito") or 0),
+    )
 
     return {
         "codigo_conta": conta_match.group(1),
         "conta_contabil": conta_match.group(2),
         "nome_fornecedor": conta_match.group(3).strip(),
-        "saldo_anterior": Decimal(str(dados_ia.get("saldo_anterior") or 0)),
+        "saldo_anterior": _ia_decimal(dados_ia.get("saldo_anterior")),
         "saldo_anterior_tipo": str(dados_ia.get("saldo_anterior_tipo") or ""),
-        "total_debito": Decimal(str(dados_ia.get("total_debito") or 0)),
-        "total_credito": Decimal(str(dados_ia.get("total_credito") or 0)),
+        "total_debito": _ia_decimal(dados_ia.get("total_debito")),
+        "total_credito": _ia_decimal(dados_ia.get("total_credito")),
         "lancamentos": lancamentos,
     }
 

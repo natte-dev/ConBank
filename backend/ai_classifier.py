@@ -144,11 +144,17 @@ def parsear_bloco_fornecedor_ia(bloco_texto: str) -> Optional[dict]:
             return None
 
         usage = response.usage
-        logger.debug(
-            "🤖 Bloco parseado — tokens: %d in / %d out",
+        n_lanc = len(data.get("lancamentos", []))
+        logger.info(
+            "🤖 IA respondeu: %d lançamentos | débito=%s | crédito=%s | tokens: %d in/%d out",
+            n_lanc,
+            data.get("total_debito"),
+            data.get("total_credito"),
             usage.prompt_tokens if usage else 0,
             usage.completion_tokens if usage else 0,
         )
+        if n_lanc > 0:
+            logger.info("   Primeiro lançamento bruto: %s", data["lancamentos"][0])
         return data
 
     except Exception as exc:
