@@ -1,7 +1,9 @@
 """
-Parser CORRIGIDO para extrair dados do Razão de Fornecedores (PDF)
-Versão otimizada com parsing robusto de valores e históricos
+Parser para extrair dados do Razão de Fornecedores (PDF).
+Estratégia: IA (GPT-4o-mini) por bloco de fornecedor como primário;
+parser regex como fallback quando a IA não está disponível ou falha.
 """
+import logging
 import re
 import zipfile
 import tempfile
@@ -12,6 +14,8 @@ from typing import List, Dict, Optional, Tuple
 import hashlib
 import pdfplumber
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 
 def calcular_hash_arquivo(arquivo_bytes: bytes) -> str:
@@ -482,6 +486,86 @@ def consolidar_fornecedores_duplicados(fornecedores: List[Dict]) -> List[Dict]:
     return fornecedores_consolidados
 
 
+def _normalizar_lancamento_ia(lanc_ia: dict) -> Optional[Dict]:
+    """Converte um lançamento retornado pelo GPT para o formato interno do parser."""
+    try:
+        data = parse_data(str(lanc_ia.get("data", "")))
+        if not data:
+            return None
+
+        vd = Decimal(str(lanc_ia.get("valor_debito") or 0))
+        vc = Decimal(str(lanc_ia.get("valor_credito") or 0))
+        saldo = Decimal(str(lanc_ia.get("saldo_apos") or 0))
+        historico = (lanc_ia.get("historico") or "").strip()
+        cpc = lanc_ia.get("conta_partida")
+        cpc = str(cpc).strip() if cpc else None
+
+        # Usar tipo retornado pela IA quando disponível; fallback para regex
+        tipo_ia = (lanc_ia.get("tipo_operacao") or "").upper()
+        if tipo_ia in ("COMPRA", "PAGAMENTO", "DEVOLUCAO", "DEBITO", "CREDITO", "OUTRO"):
+            tipo = tipo_ia
+        else:
+            tipo = classificar_tipo_operacao(historico, vd, vc)
+
+        nf = extrair_numero_nf(historico)
+        cnpj = extrair_cnpj(historico)
+
+        return {
+            "data_lancamento": data,
+            "lote": str(lanc_ia.get("lote", "") or ""),
+            "historico": historico,
+            "conta_partida": cpc,
+            "valor_debito": vd,
+            "valor_credito": vc,
+            "saldo_apos_lancamento": saldo,
+            "saldo_tipo": str(lanc_ia.get("saldo_tipo") or ""),
+            "tipo_operacao": tipo,
+            "numero_nf": nf,
+            "cnpj_historico": cnpj,
+            "classificacao_incerta": tipo in ("DEBITO", "CREDITO", "OUTRO"),
+            "classificado_por_ia": True,
+        }
+    except Exception as exc:
+        logger.warning("⚠️ _normalizar_lancamento_ia falhou: %s", exc)
+        return None
+
+
+def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[Dict]:
+    """
+    Combina o header do fornecedor (extraído por regex da linha 'Conta:')
+    com os dados financeiros retornados pela IA.
+    """
+    conta_match = None
+    for linha in linhas:
+        m = re.match(r"Conta:\s*(\d+)\s*-\s*([\d.]+)\s+(.+)$", linha.strip())
+        if m:
+            conta_match = m
+            break
+
+    if not conta_match:
+        return None
+
+    lancamentos = []
+    for lanc_ia in dados_ia.get("lancamentos", []):
+        normalizado = _normalizar_lancamento_ia(lanc_ia)
+        if normalizado:
+            lancamentos.append(normalizado)
+
+    if not lancamentos:
+        return None
+
+    return {
+        "codigo_conta": conta_match.group(1),
+        "conta_contabil": conta_match.group(2),
+        "nome_fornecedor": conta_match.group(3).strip(),
+        "saldo_anterior": Decimal(str(dados_ia.get("saldo_anterior") or 0)),
+        "saldo_anterior_tipo": str(dados_ia.get("saldo_anterior_tipo") or ""),
+        "total_debito": Decimal(str(dados_ia.get("total_debito") or 0)),
+        "total_credito": Decimal(str(dados_ia.get("total_credito") or 0)),
+        "lancamentos": lancamentos,
+    }
+
+
 def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
     """
     Função principal que parseia todo o arquivo PDF
@@ -513,31 +597,49 @@ def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
     
     print(f"✅ Texto extraído: {len(texto_completo)} caracteres")
     
+    # Importação lazy para evitar dependência circular em testes
+    from ai_classifier import parsear_bloco_fornecedor_ia
+
     # Processar o texto extraído
     fornecedores = []
     fornecedor_atual = []
-    
+    blocos_ia = 0
+    blocos_regex = 0
+
     linhas = texto_completo.split('\n')
-    
-    for linha in linhas:
-        linha = linha.strip()
-        
-        # Detectar início de novo fornecedor
-        if linha.startswith('Conta:'):
-            # Processar fornecedor anterior se existir
-            if fornecedor_atual:
-                fornecedor = parsear_fornecedor(fornecedor_atual)
-                if fornecedor:
-                    fornecedores.append(fornecedor)
-                fornecedor_atual = []
-        
-        fornecedor_atual.append(linha)
-    
-    # Processar último fornecedor
-    if fornecedor_atual:
-        fornecedor = parsear_fornecedor(fornecedor_atual)
+
+    def _processar_bloco(linhas_bloco: List[str]) -> None:
+        nonlocal blocos_ia, blocos_regex
+        if not linhas_bloco:
+            return
+
+        bloco_texto = '\n'.join(linhas_bloco)
+
+        # Tentativa 1: parser IA
+        dados_ia = parsear_bloco_fornecedor_ia(bloco_texto)
+        if dados_ia:
+            fornecedor = _construir_fornecedor_de_ia(dados_ia, linhas_bloco)
+            if fornecedor:
+                fornecedores.append(fornecedor)
+                blocos_ia += 1
+                return
+
+        # Tentativa 2: parser regex (fallback)
+        fornecedor = parsear_fornecedor(linhas_bloco)
         if fornecedor:
             fornecedores.append(fornecedor)
+            blocos_regex += 1
+
+    for linha in linhas:
+        linha = linha.strip()
+
+        if linha.startswith('Conta:'):
+            _processar_bloco(fornecedor_atual)
+            fornecedor_atual = []
+
+        fornecedor_atual.append(linha)
+
+    _processar_bloco(fornecedor_atual)
     
     # CONSOLIDAR FORNECEDORES DUPLICADOS (quebrados entre páginas)
     print(f"📋 Total de registros antes da consolidação: {len(fornecedores)}")
@@ -565,7 +667,10 @@ def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
     if match_cnpj:
         cnpj = match_cnpj.group(1).strip()
     
-    print(f"✅ Processamento concluído: {len(fornecedores)} fornecedores encontrados")
+    print(
+        f"✅ Processamento concluído: {len(fornecedores)} fornecedores "
+        f"(IA: {blocos_ia} | regex: {blocos_regex})"
+    )
     
     return {
         'hash_arquivo': hash_arquivo,
