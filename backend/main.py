@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ai_classifier import classificar_lancamentos_incertos
 from conciliacao_intel import conciliar_todos_fornecedores_inteligente
 from consolidador import consolidar_todos_fornecedores
 from database import get_db, init_db
@@ -136,6 +137,17 @@ async def upload_arquivo(
             dados = parsear_arquivo_razao(conteudo)
             dados = consolidar_todos_fornecedores(dados)
 
+            # Coletar lançamentos com classificação incerta e reclassificar via IA
+            incertos = [
+                lanc
+                for forn in dados["fornecedores"]
+                for lanc in forn.get("lancamentos", [])
+                if lanc.get("classificacao_incerta")
+            ]
+            if incertos:
+                logger.info("🤖 Enviando %d lançamentos incertos para classificação IA…", len(incertos))
+                classificar_lancamentos_incertos(incertos)
+
             arquivo.data_inicio   = _converter_data_br(dados.get("periodo_inicio"))
             arquivo.data_fim      = _converter_data_br(dados.get("periodo_fim"))
             arquivo.empresa       = dados.get("empresa")
@@ -189,6 +201,7 @@ async def upload_arquivo(
                         numero_nf             = lanc_data.get("numero_nf"),
                         cnpj_historico        = lanc_data.get("cnpj_historico"),
                         valor_saldo           = vc if lanc_data["tipo_operacao"] == "COMPRA" else Decimal("0"),
+                        classificado_por_ia   = lanc_data.get("classificado_por_ia", False),
                     ))
 
             db.commit()

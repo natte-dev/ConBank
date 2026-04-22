@@ -323,13 +323,19 @@ def parsear_fornecedor(linhas: List[str]) -> Optional[Dict]:
             lancamento_atual = lancamento
         
         elif lancamento_atual and linha and not re.match(r'^\d{2}/\d{2}/\d{4}', linha):
+            # Ignorar linhas que são apenas o nome do fornecedor repetido (ruído do PDF)
+            nome_norm = re.sub(r'\s+', ' ', fornecedor.get('nome_fornecedor', '').upper().strip())
+            linha_norm = re.sub(r'\s+', ' ', linha.upper().strip())
+            if nome_norm and (linha_norm == nome_norm or linha_norm.startswith(nome_norm)):
+                continue
+
             # Continuação do histórico APÓS data
             lancamento_atual['historico'] += " " + linha
-            
+
             # Tentar extrair NF da linha continuação E do histórico acumulado
             nf_linha = extrair_numero_nf(linha)
             nf_historico = extrair_numero_nf(lancamento_atual['historico'])
-            
+
             # Priorizar NF mais longa/completa
             if nf_historico:
                 lancamento_atual['numero_nf'] = nf_historico
@@ -348,11 +354,22 @@ def parsear_fornecedor(linhas: List[str]) -> Optional[Dict]:
         # Atualizar tipo de operação e NF em todos os lançamentos
         for lanc in lancamentos:
             # Recalcular tipo com histórico completo
-            lanc['tipo_operacao'] = classificar_tipo_operacao(
-                lanc['historico'], 
-                lanc['valor_debito'], 
+            tipo = classificar_tipo_operacao(
+                lanc['historico'],
+                lanc['valor_debito'],
                 lanc['valor_credito']
             )
+            lanc['tipo_operacao'] = tipo
+
+            # Marcar como incerto quando o regex usou o catch-all
+            historico_upper = lanc['historico'].upper()
+            nf_esperada = (
+                lanc.get('numero_nf') is None
+                and lanc['valor_credito'] > 0
+                and any(kw in historico_upper for kw in ("NF", "NOTA", "NUMERO"))
+            )
+            lanc['classificacao_incerta'] = tipo in ("DEBITO", "CREDITO", "OUTRO") or nf_esperada
+
             # SEMPRE re-extrair NF com histórico completo
             # (histórico pode conter NF em linha seguinte)
             nf_historico_completo = extrair_numero_nf(lanc['historico'])

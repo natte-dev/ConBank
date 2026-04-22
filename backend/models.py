@@ -102,7 +102,10 @@ class LancamentoFornecedor(Base):
     valor_pago_parcial = Column(Numeric(15, 2), default=0)
     valor_saldo = Column(Numeric(15, 2), default=0)
     status_pagamento = Column(String(20))  # PAGO, PARCIAL, PENDENTE
-    
+
+    # Auditoria de classificação
+    classificado_por_ia = Column(Boolean, default=False, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relacionamentos
