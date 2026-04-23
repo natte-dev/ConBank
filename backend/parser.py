@@ -702,7 +702,7 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
     """
     conta_match = None
     for linha in linhas:
-        m = re.match(r"Conta:\s*(\d+)\s*-\s*([\d.]+)\s+(.+)$", linha.strip())
+        m = re.match(r"Conta:\s*(\d+)\s*(?:-\s*)?([\d.]+)\s+(.+)$", linha.strip())
         if m:
             conta_match = m
             break
