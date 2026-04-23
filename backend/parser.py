@@ -643,7 +643,7 @@ def _recuperar_lancamentos_ocultos(lancamentos: List[Dict], linhas_bloco: List[s
         if abs(gap) < TOLERANCIA:
             continue
 
-        data_sint = prox.get("data_lancamento") or lanc.get("data_lancamento")
+        data_sint = lanc.get("data_lancamento") or prox.get("data_lancamento")
 
         if gap > 0:
             numero_nf = nfs_livres[nf_ptr] if nf_ptr < len(nfs_livres) else None

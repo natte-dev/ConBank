@@ -940,7 +940,10 @@ function App() {
 
   const formatarData = (data: string | null) => {
     if (!data) return '-'
-    return new Date(data).toLocaleDateString('pt-BR')
+    // Date-only strings (YYYY-MM-DD) are parsed as UTC midnight by JS, shifting
+    // the day backwards in UTC-3 (Brazil). Force local noon to avoid the offset.
+    const s = data.includes('T') ? data : data + 'T12:00:00'
+    return new Date(s).toLocaleDateString('pt-BR')
   }
 
   const fornecedoresFiltrados = fornecedores.filter(f =>
