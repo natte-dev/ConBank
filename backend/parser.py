@@ -386,33 +386,68 @@ def parsear_fornecedor(linhas: List[str]) -> Optional[Dict]:
     return None
 
 
+def _extrair_pagina_por_palavras(pagina) -> str:
+    """
+    Extrai texto de uma página agrupando palavras por posição y (linha).
+    Resolve o problema de intercalação de colunas: extract_text() confunde
+    caracteres de colunas adjacentes; extract_words() mantém cada palavra
+    como objeto independente com coordenadas próprias, sem intercalação.
+    """
+    try:
+        words = pagina.extract_words(x_tolerance=3, y_tolerance=3)
+        if not words:
+            return ""
+
+        # Agrupar palavras em linhas usando bucket de 5px na coordenada y
+        bucket = 5
+        linhas: dict[int, list] = {}
+        for word in words:
+            y_key = int(word["top"] // bucket) * bucket
+            if y_key not in linhas:
+                linhas[y_key] = []
+            linhas[y_key].append(word)
+
+        # Reconstruir linhas ordenando palavras da esquerda para direita
+        resultado = []
+        for y in sorted(linhas.keys()):
+            palavras = sorted(linhas[y], key=lambda w: w["x0"])
+            resultado.append("  ".join(w["text"] for w in palavras))
+
+        return "\n".join(resultado)
+    except Exception as exc:
+        print(f"⚠️ Extração por palavras falhou: {exc}")
+        return ""
+
+
 def extrair_texto_pdf(arquivo_bytes: bytes) -> str:
     """
-    Extrai texto de um PDF usando pdfplumber
+    Extrai texto de um PDF usando pdfplumber.
+    Usa extract_words() + agrupamento por y como método primário para
+    evitar intercalação de colunas em PDFs com layout de tabela.
+    Fallback para extract_text(layout=True) se extract_words retornar vazio.
     """
     texto_completo = []
-    
+
     try:
         with pdfplumber.open(BytesIO(arquivo_bytes)) as pdf:
             total_paginas = len(pdf.pages)
-            
             print(f"📄 PDF detectado: {total_paginas} páginas")
-            
+
             for i, pagina in enumerate(pdf.pages, 1):
-                # layout=True preserves physical column positions, preventing
-                # character interleaving when pdfplumber reads multi-column tables
-                texto = pagina.extract_text(layout=True)
+                texto = _extrair_pagina_por_palavras(pagina)
+                if not texto:
+                    texto = pagina.extract_text(layout=True) or ""
                 if texto:
                     texto_completo.append(texto)
-                
+
                 if i % 10 == 0:
                     print(f"   Processadas {i}/{total_paginas} páginas...")
-            
+
             print(f"✅ Extração concluída: {len(texto_completo)} páginas com texto")
-    
+
     except Exception as e:
         raise ValueError(f"Erro ao extrair texto do PDF: {str(e)}")
-    
+
     return "\n\n".join(texto_completo)
 
 
