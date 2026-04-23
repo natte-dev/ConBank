@@ -90,6 +90,20 @@ async def root():
     return {"message": "Sistema de Conciliação de Fornecedores", "version": "1.0.0", "status": "online"}
 
 
+@app.post("/debug/pdf-texto")
+async def debug_pdf_texto(file: UploadFile = File(...)):
+    """Retorna o texto bruto extraído do PDF pelo pdfplumber — para diagnóstico."""
+    conteudo = await file.read()
+    from parser import extrair_texto_pdf
+    texto = extrair_texto_pdf(conteudo)
+    linhas = texto.split("\n")
+    return {
+        "total_chars": len(texto),
+        "total_linhas": len(linhas),
+        "texto_completo": texto,
+    }
+
+
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     """
