@@ -602,6 +602,99 @@ def _normalizar_lancamento_ia(lanc_ia: dict) -> Optional[Dict]:
         return None
 
 
+def _recuperar_lancamentos_ocultos(lancamentos: List[Dict], linhas_bloco: List[str]) -> List[Dict]:
+    """
+    Detecta lançamentos ocultos analisando saltos de saldo entre entradas consecutivas.
+    Para cada gap não explicado pelos lançamentos visíveis, cria um lançamento sintético.
+    """
+    TOLERANCIA = Decimal("0.05")
+    texto_bloco = "\n".join(linhas_bloco).upper()
+
+    nfs_atribuidas = {l.get("numero_nf") for l in lancamentos if l.get("numero_nf")}
+    nfs_no_bloco = re.findall(r'N[ÚU]MERO\s+(\d{6,7})', texto_bloco)
+    nfs_livres = [nf for nf in nfs_no_bloco if nf not in nfs_atribuidas]
+    nf_ptr = 0
+
+    resultado: List[Dict] = []
+
+    for i, lanc in enumerate(lancamentos):
+        resultado.append(lanc)
+
+        if i + 1 >= len(lancamentos):
+            break
+
+        prox = lancamentos[i + 1]
+
+        saldo_atual = Decimal(str(lanc.get("saldo_apos_lancamento") or 0))
+        saldo_prox  = Decimal(str(prox.get("saldo_apos_lancamento") or 0))
+        vc_prox     = Decimal(str(prox.get("valor_credito") or 0))
+        vd_prox     = Decimal(str(prox.get("valor_debito") or 0))
+
+        if saldo_atual == 0 or saldo_prox == 0:
+            continue
+
+        gap = saldo_prox - saldo_atual - vc_prox + vd_prox
+
+        if abs(gap) < TOLERANCIA:
+            continue
+
+        data_sint = prox.get("data_lancamento") or lanc.get("data_lancamento")
+
+        if gap > 0:
+            numero_nf = nfs_livres[nf_ptr] if nf_ptr < len(nfs_livres) else None
+            nf_ptr += 1
+            if numero_nf:
+                nfs_atribuidas.add(numero_nf)
+            sintetico = {
+                "data_lancamento": data_sint,
+                "lote": "",
+                "historico": f"COMPRA NF {numero_nf} (RECUPERADO)" if numero_nf else "COMPRA (RECUPERADO)",
+                "conta_partida": None,
+                "valor_debito": Decimal("0"),
+                "valor_credito": gap,
+                "saldo_apos_lancamento": saldo_atual + gap,
+                "saldo_tipo": "C",
+                "tipo_operacao": "COMPRA",
+                "numero_nf": numero_nf,
+                "cnpj_historico": None,
+                "classificacao_incerta": False,
+                "classificado_por_ia": True,
+            }
+            print(f"🔧 Recuperado: COMPRA NF={numero_nf or '?'} R$ {float(gap):.2f}")
+        else:
+            valor_pag = abs(gap)
+            if "SISPAG" in texto_bloco:
+                hist = "SISPAG (RECUPERADO)"
+            elif "BOLETO" in texto_bloco:
+                hist = "BOLETO (RECUPERADO)"
+            else:
+                hist = "PAGAMENTO (RECUPERADO)"
+            sintetico = {
+                "data_lancamento": data_sint,
+                "lote": "",
+                "historico": hist,
+                "conta_partida": None,
+                "valor_debito": valor_pag,
+                "valor_credito": Decimal("0"),
+                "saldo_apos_lancamento": saldo_atual - valor_pag,
+                "saldo_tipo": "C",
+                "tipo_operacao": "PAGAMENTO",
+                "numero_nf": None,
+                "cnpj_historico": None,
+                "classificacao_incerta": False,
+                "classificado_por_ia": True,
+            }
+            print(f"🔧 Recuperado: PAGAMENTO R$ {float(valor_pag):.2f}")
+
+        resultado.append(sintetico)
+
+    recuperados = len(resultado) - len(lancamentos)
+    if recuperados > 0:
+        print(f"🔧 Total: {recuperados} lançamentos ocultos recuperados por análise de saldo")
+
+    return resultado
+
+
 def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[Dict]:
     """
     Combina o header do fornecedor (extraído por regex da linha 'Conta:')
@@ -630,6 +723,8 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
             f"Primeiro: {brutos[0] if brutos else 'vazio'}"
         )
         return None
+
+    lancamentos = _recuperar_lancamentos_ocultos(lancamentos, linhas)
 
     print(
         f"✅ IA parseou bloco: {len(lancamentos)} lançamentos, "
