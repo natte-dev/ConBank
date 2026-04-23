@@ -12,7 +12,7 @@ import {
   Sun,
 } from 'lucide-react'
 import apiService from './services/api'
-import type { Arquivo, Fornecedor, FornecedorDetalhado } from './services/api'
+import type { Arquivo, Fornecedor, FornecedorDetalhado, ConciliacaoFifoItem } from './services/api'
 
 interface Resumo {
   total_fornecedores: number
@@ -653,6 +653,109 @@ const styles = `
     gap: 0.75rem;
   }
 
+  .section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .btn-detalhes {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.25rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: all 0.2s;
+  }
+
+  .btn-detalhes:hover {
+    border-color: #3b82f6;
+    color: #3b82f6;
+  }
+
+  .fifo-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    padding: 1rem;
+  }
+
+  .fifo-modal-content {
+    background: var(--card);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 860px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+
+  .fifo-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .fifo-modal-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .fifo-table-wrap {
+    overflow-y: auto;
+    padding: 1rem 1.5rem 1.5rem;
+  }
+
+  .fifo-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .fifo-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    color: var(--muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .fifo-table td {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fifo-table tr:last-child td { border-bottom: none; }
+
+  .fifo-table tr:hover td { background: var(--soft); }
+
+  .fifo-badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .fifo-badge.PAGO { background: rgba(34,197,94,0.15); color: #22c55e; }
+  .fifo-badge.PARCIAL { background: rgba(245,158,11,0.15); color: #f59e0b; }
+  .fifo-badge.PENDENTE { background: rgba(239,68,68,0.15); color: #ef4444; }
+
   @media (max-width: 768px) {
     .container {
       padding: 1rem;
@@ -710,6 +813,8 @@ function App() {
   const [resumo, setResumo] = useState<Resumo | null>(null)
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([])
   const [fornecedorDetalhado, setFornecedorDetalhado] = useState<FornecedorDetalhado | null>(null)
+  const [fifoDetalhes, setFifoDetalhes] = useState<ConciliacaoFifoItem[] | null>(null)
+  const [carregandoFifo, setCarregandoFifo] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [statusFiltro, setStatusFiltro] = useState<string>('')
   const [busca, setBusca] = useState('')
@@ -790,6 +895,19 @@ function App() {
       setFornecedorDetalhado(data)
     } catch (error) {
       console.error('Erro ao carregar detalhes:', error)
+    }
+  }
+
+  const handleVerFifoDetalhes = async () => {
+    if (!fornecedorDetalhado) return
+    try {
+      setCarregandoFifo(true)
+      const data = await apiService.obterConciliacaoFifo(fornecedorDetalhado.fornecedor.id)
+      setFifoDetalhes(data.conciliacao)
+    } catch (error) {
+      console.error('Erro ao carregar FIFO:', error)
+    } finally {
+      setCarregandoFifo(false)
     }
   }
 
@@ -1010,8 +1128,53 @@ function App() {
           </>
         )}
 
+        {fifoDetalhes && (
+          <div className="fifo-modal" onClick={() => setFifoDetalhes(null)}>
+            <div className="fifo-modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="fifo-modal-header">
+                <h3>Resultado da Conciliação FIFO — {fornecedorDetalhado?.fornecedor.nome_fornecedor}</h3>
+                <button className="modal-close" onClick={() => setFifoDetalhes(null)}>
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="fifo-table-wrap">
+                <table className="fifo-table">
+                  <thead>
+                    <tr>
+                      <th>NF</th>
+                      <th>Data Lançamento</th>
+                      <th>Valor</th>
+                      <th>Pago</th>
+                      <th>Data Pagamento</th>
+                      <th>Saldo</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fifoDetalhes.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.numero_nf}</td>
+                        <td>{item.data_lancamento ? formatarData(item.data_lancamento) : '—'}</td>
+                        <td>{formatarMoeda(item.valor_total)}</td>
+                        <td>{formatarMoeda(item.valor_pago)}</td>
+                        <td>{item.data_pagamento ? formatarData(item.data_pagamento) : '—'}</td>
+                        <td style={{ color: item.valor_saldo > 0 ? '#f59e0b' : 'inherit', fontWeight: item.valor_saldo > 0 ? 700 : 400 }}>
+                          {formatarMoeda(item.valor_saldo)}
+                        </td>
+                        <td>
+                          <span className={`fifo-badge ${item.status}`}>{item.status}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {fornecedorDetalhado && (
-          <div className="modal-overlay" onClick={() => setFornecedorDetalhado(null)}>
+          <div className="modal-overlay" onClick={() => { setFornecedorDetalhado(null); setFifoDetalhes(null) }}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
                 <div>
@@ -1020,7 +1183,7 @@ function App() {
                     Conta: {fornecedorDetalhado.fornecedor.codigo_conta} - {fornecedorDetalhado.fornecedor.conta_contabil}
                   </p>
                 </div>
-                <button className="modal-close" onClick={() => setFornecedorDetalhado(null)}>
+                <button className="modal-close" onClick={() => { setFornecedorDetalhado(null); setFifoDetalhes(null) }}>
                   <X size={18} />
                 </button>
               </div>
@@ -1043,7 +1206,16 @@ function App() {
                   </div>
                 </div>
 
-                <h3 className="section-title">Créditos Pendentes</h3>
+                <div className="section-title-row">
+                  <h3 className="section-title" style={{ marginBottom: 0 }}>Créditos Pendentes</h3>
+                  <button
+                    className="btn-detalhes"
+                    onClick={handleVerFifoDetalhes}
+                    disabled={carregandoFifo}
+                  >
+                    {carregandoFifo ? '...' : '⊞ Detalhes FIFO'}
+                  </button>
+                </div>
 
                 {fornecedorDetalhado.compras_pendentes.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>

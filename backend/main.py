@@ -413,6 +413,53 @@ async def obter_fornecedor_detalhado(fornecedor_id: int, db: Session = Depends(g
     }
 
 
+@app.get("/fornecedores/{fornecedor_id}/conciliacao-fifo")
+async def conciliacao_fifo_detalhada(fornecedor_id: int, db: Session = Depends(get_db)):
+    """Retorna todas as compras com seus pagamentos vinculados (datas incluídas)."""
+    compras = (
+        db.query(LancamentoFornecedor)
+        .filter(
+            LancamentoFornecedor.fornecedor_id == fornecedor_id,
+            LancamentoFornecedor.tipo_operacao == "COMPRA",
+        )
+        .order_by(LancamentoFornecedor.data_lancamento)
+        .all()
+    )
+
+    result = []
+    for compra in compras:
+        conciliacoes = (
+            db.query(ConciliacaoInterna)
+            .filter(ConciliacaoInterna.lancamento_credito_id == compra.id)
+            .order_by(ConciliacaoInterna.created_at)
+            .all()
+        )
+
+        pagamentos = []
+        for c in conciliacoes:
+            deb = c.lancamento_debito
+            if deb:
+                pagamentos.append({
+                    "data_pagamento": deb.data_lancamento.isoformat() if deb.data_lancamento else None,
+                    "historico": deb.historico,
+                    "valor_pago": float(c.valor_conciliado),
+                })
+
+        result.append({
+            "numero_nf":       compra.numero_nf or "—",
+            "data_lancamento": compra.data_lancamento.isoformat() if compra.data_lancamento else None,
+            "historico":       compra.historico,
+            "valor_total":     float(compra.valor_credito),
+            "valor_pago":      float(compra.valor_pago_parcial or 0),
+            "data_pagamento":  pagamentos[-1]["data_pagamento"] if pagamentos else None,
+            "valor_saldo":     float(compra.valor_saldo or 0),
+            "status":          compra.status_pagamento or "PENDENTE",
+            "pagamentos":      pagamentos,
+        })
+
+    return {"conciliacao": result}
+
+
 @app.get("/divergencias")
 async def listar_divergencias(arquivo_id: int, db: Session = Depends(get_db)):
     divergencias = (

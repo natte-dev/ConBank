@@ -84,6 +84,22 @@ export interface FornecedorDetalhado {
   }>;
 }
 
+export interface ConciliacaoFifoItem {
+  numero_nf: string;
+  data_lancamento: string | null;
+  historico: string;
+  valor_total: number;
+  valor_pago: number;
+  data_pagamento: string | null;
+  valor_saldo: number;
+  status: string;
+  pagamentos: Array<{
+    data_pagamento: string | null;
+    historico: string;
+    valor_pago: number;
+  }>;
+}
+
 export interface Divergencia {
   id: number;
   fornecedor_id: number;
@@ -136,6 +152,11 @@ export const apiService = {
 
   obterFornecedorDetalhado: async (fornecedorId: number): Promise<FornecedorDetalhado> => {
     const { data } = await api.get(`/fornecedores/${fornecedorId}`);
+    return data;
+  },
+
+  obterConciliacaoFifo: async (fornecedorId: number): Promise<{ conciliacao: ConciliacaoFifoItem[] }> => {
+    const { data } = await api.get(`/fornecedores/${fornecedorId}/conciliacao-fifo`);
     return data;
   },
 
