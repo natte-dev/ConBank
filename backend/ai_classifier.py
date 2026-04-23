@@ -45,9 +45,10 @@ REGRAS OBRIGATÓRIAS:
 3. DÉBITO (valor_debito > 0) = pagamento: SISPAG, BOLETO, TED, PIX, PGTO, PAGAMENTO, BAIXA, TRANSF, DOC
 4. CRÉDITO (valor_credito > 0) = compra/aquisição: NF, NOTA FISCAL, CT-E, COMPRA, CONFORME, SERVIÇO, AQUISIÇÃO
 5. A linha "SALDO ANTERIOR" indica o saldo inicial do fornecedor
-6. A linha "Total da conta: X Y" → X = total_debito, Y = total_credito do período
+6. A linha "Total da conta: X Y" → X = total_debito, Y = total_credito. OBRIGATÓRIO: leia esta linha diretamente do texto e retorne os valores exatos — NÃO calcule; se a linha existir, os campos total_debito e total_credito NUNCA devem ser 0.
 7. O saldo crescente com sufixo C = credor; D = devedor
 8. tipo_operacao deve ser: COMPRA, PAGAMENTO, DEVOLUCAO, DEBITO, ou CREDITO
+9. O texto pode conter colunas intercaladas com espaços extras — leia cada linha pela DATA no início (DD/MM/YYYY) para identificar lançamentos válidos
 
 ATENÇÃO:
 - No Formato 2, o valor que aparece na linha sem data (ex: "13.101,10C") é o SALDO após o lançamento, não o valor do lançamento. O valor do lançamento está na linha com data (ex: "902 13.101,10" — onde 902 é o CPC e 13.101,10 é o valor).

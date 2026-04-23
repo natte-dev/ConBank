@@ -399,7 +399,9 @@ def extrair_texto_pdf(arquivo_bytes: bytes) -> str:
             print(f"📄 PDF detectado: {total_paginas} páginas")
             
             for i, pagina in enumerate(pdf.pages, 1):
-                texto = pagina.extract_text()
+                # layout=True preserves physical column positions, preventing
+                # character interleaving when pdfplumber reads multi-column tables
+                texto = pagina.extract_text(layout=True)
                 if texto:
                     texto_completo.append(texto)
                 
