@@ -97,6 +97,7 @@ export interface ConciliacaoFifoItem {
     data_pagamento: string | null;
     historico: string;
     valor_pago: number;
+    saldo_restante: number;
   }>;
 }
 

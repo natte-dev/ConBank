@@ -611,8 +611,13 @@ def _recuperar_lancamentos_ocultos(lancamentos: List[Dict], linhas_bloco: List[s
     texto_bloco = "\n".join(linhas_bloco).upper()
 
     nfs_atribuidas = {l.get("numero_nf") for l in lancamentos if l.get("numero_nf")}
-    nfs_no_bloco = re.findall(r'N[ÚU]MERO\s+(\d{6,7})', texto_bloco)
-    nfs_livres = [nf for nf in nfs_no_bloco if nf not in nfs_atribuidas]
+    _seen: set = set()
+    nfs_unicas: List[str] = []
+    for nf in re.findall(r'N[ÚU]MERO\s+(\d{6,7})', texto_bloco):
+        if nf not in _seen:
+            _seen.add(nf)
+            nfs_unicas.append(nf)
+    nfs_livres = [nf for nf in nfs_unicas if nf not in nfs_atribuidas]
     nf_ptr = 0
 
     resultado: List[Dict] = []

@@ -756,6 +756,16 @@ const styles = `
   .fifo-badge.PARCIAL { background: rgba(245,158,11,0.15); color: #f59e0b; }
   .fifo-badge.PENDENTE { background: rgba(239,68,68,0.15); color: #ef4444; }
 
+  .fifo-table tr.fifo-expandable { cursor: pointer; }
+  .fifo-table tr.fifo-expandable:hover td { background: var(--soft); }
+  .fifo-sub-row td {
+    background: color-mix(in srgb, var(--soft) 60%, transparent);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .fifo-expand-icon { font-size: 0.65rem; color: var(--muted); user-select: none; }
+
   @media (max-width: 768px) {
     .container {
       padding: 1rem;
@@ -815,6 +825,7 @@ function App() {
   const [fornecedorDetalhado, setFornecedorDetalhado] = useState<FornecedorDetalhado | null>(null)
   const [fifoDetalhes, setFifoDetalhes] = useState<ConciliacaoFifoItem[] | null>(null)
   const [carregandoFifo, setCarregandoFifo] = useState(false)
+  const [nfExpandida, setNfExpandida] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const [statusFiltro, setStatusFiltro] = useState<string>('')
   const [busca, setBusca] = useState('')
@@ -1129,11 +1140,11 @@ function App() {
         )}
 
         {fifoDetalhes && (
-          <div className="fifo-modal" onClick={() => setFifoDetalhes(null)}>
+          <div className="fifo-modal" onClick={() => { setFifoDetalhes(null); setNfExpandida(null) }}>
             <div className="fifo-modal-content" onClick={(e) => e.stopPropagation()}>
               <div className="fifo-modal-header">
                 <h3>Resultado da Conciliação FIFO — {fornecedorDetalhado?.fornecedor.nome_fornecedor}</h3>
-                <button className="modal-close" onClick={() => setFifoDetalhes(null)}>
+                <button className="modal-close" onClick={() => { setFifoDetalhes(null); setNfExpandida(null) }}>
                   <X size={18} />
                 </button>
               </div>
@@ -1141,6 +1152,7 @@ function App() {
                 <table className="fifo-table">
                   <thead>
                     <tr>
+                      <th style={{ width: '1.5rem' }}></th>
                       <th>NF</th>
                       <th>Data Lançamento</th>
                       <th>Valor</th>
@@ -1151,21 +1163,50 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {fifoDetalhes.map((item, idx) => (
-                      <tr key={idx}>
-                        <td style={{ fontWeight: 600 }}>{item.numero_nf}</td>
-                        <td>{item.data_lancamento ? formatarData(item.data_lancamento) : '—'}</td>
-                        <td>{formatarMoeda(item.valor_total)}</td>
-                        <td>{formatarMoeda(item.valor_pago)}</td>
-                        <td>{item.data_pagamento ? formatarData(item.data_pagamento) : '—'}</td>
-                        <td style={{ color: item.valor_saldo > 0 ? '#f59e0b' : 'inherit', fontWeight: item.valor_saldo > 0 ? 700 : 400 }}>
-                          {formatarMoeda(item.valor_saldo)}
-                        </td>
-                        <td>
-                          <span className={`fifo-badge ${item.status}`}>{item.status}</span>
-                        </td>
-                      </tr>
-                    ))}
+                    {fifoDetalhes.map((item, idx) => {
+                      const temPagamentos = (item.pagamentos?.length ?? 0) > 0
+                      const expandido = nfExpandida === idx
+                      return (
+                        <>
+                          <tr
+                            key={idx}
+                            className={temPagamentos ? 'fifo-expandable' : undefined}
+                            onClick={() => temPagamentos && setNfExpandida(expandido ? null : idx)}
+                          >
+                            <td>
+                              {temPagamentos && (
+                                <span className="fifo-expand-icon">{expandido ? '▲' : '▼'}</span>
+                              )}
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{item.numero_nf}</td>
+                            <td>{item.data_lancamento ? formatarData(item.data_lancamento) : '—'}</td>
+                            <td>{formatarMoeda(item.valor_total)}</td>
+                            <td>{formatarMoeda(item.valor_pago)}</td>
+                            <td>{item.data_pagamento ? formatarData(item.data_pagamento) : '—'}</td>
+                            <td style={{ color: item.valor_saldo > 0 ? '#f59e0b' : 'inherit', fontWeight: item.valor_saldo > 0 ? 700 : 400 }}>
+                              {formatarMoeda(item.valor_saldo)}
+                            </td>
+                            <td>
+                              <span className={`fifo-badge ${item.status}`}>{item.status}</span>
+                            </td>
+                          </tr>
+                          {expandido && item.pagamentos?.map((pag, pi) => (
+                            <tr key={`sub-${idx}-${pi}`} className="fifo-sub-row">
+                              <td></td>
+                              <td style={{ paddingLeft: '1.5rem' }}>{item.numero_nf}</td>
+                              <td>{item.data_lancamento ? formatarData(item.data_lancamento) : '—'}</td>
+                              <td>{formatarMoeda(item.valor_total)}</td>
+                              <td style={{ color: 'var(--text)', fontWeight: 500 }}>{formatarMoeda(pag.valor_pago)}</td>
+                              <td>{pag.data_pagamento ? formatarData(pag.data_pagamento) : '—'}</td>
+                              <td style={{ fontWeight: 600, color: pag.saldo_restante > 0 ? '#f59e0b' : '#22c55e' }}>
+                                {formatarMoeda(pag.saldo_restante)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          ))}
+                        </>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

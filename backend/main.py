@@ -415,7 +415,7 @@ async def obter_fornecedor_detalhado(fornecedor_id: int, db: Session = Depends(g
 
 @app.get("/fornecedores/{fornecedor_id}/conciliacao-fifo")
 async def conciliacao_fifo_detalhada(fornecedor_id: int, db: Session = Depends(get_db)):
-    """Retorna todas as compras com seus pagamentos vinculados (datas incluídas)."""
+    """Retorna compras com trace FIFO de pagamentos (datas e saldo restante por parcela)."""
     compras = (
         db.query(LancamentoFornecedor)
         .filter(
@@ -425,36 +425,49 @@ async def conciliacao_fifo_detalhada(fornecedor_id: int, db: Session = Depends(g
         .order_by(LancamentoFornecedor.data_lancamento)
         .all()
     )
+    pagamentos_db = (
+        db.query(LancamentoFornecedor)
+        .filter(
+            LancamentoFornecedor.fornecedor_id == fornecedor_id,
+            LancamentoFornecedor.tipo_operacao == "PAGAMENTO",
+        )
+        .order_by(LancamentoFornecedor.data_lancamento)
+        .all()
+    )
+
+    saldo = {c.id: Decimal(str(c.valor_credito)) for c in compras}
+    pags_por_nf: dict = {c.id: [] for c in compras}
+
+    for pag in pagamentos_db:
+        restante = Decimal(str(pag.valor_debito))
+        for compra in compras:
+            if saldo[compra.id] <= Decimal("0.01"):
+                continue
+            if restante <= Decimal("0.01"):
+                break
+            aplicado = min(restante, saldo[compra.id])
+            saldo[compra.id] -= aplicado
+            restante -= aplicado
+            pags_por_nf[compra.id].append({
+                "data_pagamento": pag.data_lancamento.isoformat() if pag.data_lancamento else None,
+                "historico": pag.historico,
+                "valor_pago": float(aplicado),
+                "saldo_restante": float(saldo[compra.id]),
+            })
 
     result = []
     for compra in compras:
-        conciliacoes = (
-            db.query(ConciliacaoInterna)
-            .filter(ConciliacaoInterna.lancamento_credito_id == compra.id)
-            .order_by(ConciliacaoInterna.created_at)
-            .all()
-        )
-
-        pagamentos = []
-        for c in conciliacoes:
-            deb = c.lancamento_debito
-            if deb:
-                pagamentos.append({
-                    "data_pagamento": deb.data_lancamento.isoformat() if deb.data_lancamento else None,
-                    "historico": deb.historico,
-                    "valor_pago": float(c.valor_conciliado),
-                })
-
+        pags = pags_por_nf[compra.id]
         result.append({
             "numero_nf":       compra.numero_nf or "—",
             "data_lancamento": compra.data_lancamento.isoformat() if compra.data_lancamento else None,
             "historico":       compra.historico,
             "valor_total":     float(compra.valor_credito),
             "valor_pago":      float(compra.valor_pago_parcial or 0),
-            "data_pagamento":  pagamentos[-1]["data_pagamento"] if pagamentos else None,
+            "data_pagamento":  pags[-1]["data_pagamento"] if pags else None,
             "valor_saldo":     float(compra.valor_saldo or 0),
             "status":          compra.status_pagamento or "PENDENTE",
-            "pagamentos":      pagamentos,
+            "pagamentos":      pags,
         })
 
     return {"conciliacao": result}
