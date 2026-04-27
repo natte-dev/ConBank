@@ -162,26 +162,15 @@ def parsear_bloco_fornecedor_ia(bloco_texto: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Parsing via Vision (fallback para texto garbled)
+# Parsing via Vision — helper de um único batch (≤ 3 páginas)
 # ---------------------------------------------------------------------------
-def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "") -> Optional[dict]:
-    """
-    Envia imagens de página(s) ao GPT-4o-mini Vision e retorna o mesmo formato
-    de parsear_bloco_fornecedor_ia(). Usado quando o texto extraído está garbled.
-    png_bytes_list: lista de bytes PNG (uma entrada por página).
-    """
+def _visao_batch(client, png_bytes_list: list, bloco_texto: str = "") -> Optional[dict]:
+    """Envia até 3 imagens PNG ao gpt-4o Vision e retorna o dict parseado."""
     import base64
-
-    if not png_bytes_list:
-        return None
-
-    client = _get_client()
-    if client is None:
-        return None
 
     content: list = []
 
-    # Contexto textual (pode ter NF numbers mesmo garbled — ajuda a IA)
+    # Contexto textual como dica (nome do fornecedor, NF numbers etc.)
     if bloco_texto and len(bloco_texto.strip()) > 20:
         content.append({
             "type": "text",
@@ -192,7 +181,7 @@ def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "
             ),
         })
 
-    for png in png_bytes_list[:3]:  # máx 3 páginas por chamada
+    for png in png_bytes_list[:3]:
         b64 = base64.b64encode(png).decode()
         content.append({
             "type": "image_url",
@@ -201,7 +190,7 @@ def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",          # modelo completo — muito melhor em tabelas financeiras
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": PARSE_SYSTEM_PROMPT},
@@ -213,7 +202,7 @@ def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "
 
         data = json.loads(response.choices[0].message.content)
         if not isinstance(data.get("lancamentos"), list):
-            logger.warning("⚠️ Vision IA retornou JSON sem 'lancamentos'.")
+            logger.warning("⚠️ Vision batch retornou JSON sem 'lancamentos'.")
             return None
 
         usage = response.usage
@@ -229,8 +218,73 @@ def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "
         return data
 
     except Exception as exc:
-        logger.warning("⚠️ parsear_bloco_fornecedor_ia_visao falhou: %s", exc)
+        logger.warning("⚠️ Vision batch falhou: %s", exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Parsing via Vision (primário para todos os blocos)
+# ---------------------------------------------------------------------------
+def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "") -> Optional[dict]:
+    """
+    Envia imagens de páginas ao gpt-4o Vision.
+    Para blocos com muitas páginas, pagina automaticamente em batches de 3
+    e acumula os lançamentos de todos os batches.
+    png_bytes_list: lista de bytes PNG (uma entrada por página).
+    """
+    if not png_bytes_list:
+        return None
+
+    client = _get_client()
+    if client is None:
+        return None
+
+    BATCH_SIZE = 3
+
+    # Bloco pequeno: chamada única
+    if len(png_bytes_list) <= BATCH_SIZE:
+        return _visao_batch(client, png_bytes_list, bloco_texto)
+
+    # Bloco grande: paginar e acumular
+    n_batches = (len(png_bytes_list) + BATCH_SIZE - 1) // BATCH_SIZE
+    print(f"   📦 {len(png_bytes_list)} páginas → {n_batches} batches Vision (gpt-4o)...")
+
+    todos_lancamentos: list = []
+    saldo_anterior = 0.0
+    saldo_anterior_tipo = ""
+    total_debito = 0.0
+    total_credito = 0.0
+
+    for batch_idx in range(n_batches):
+        start = batch_idx * BATCH_SIZE
+        batch = png_bytes_list[start : start + BATCH_SIZE]
+        print(f"   📦 Batch {batch_idx + 1}/{n_batches} (págs {start}–{start + len(batch) - 1})...")
+
+        # Passa contexto de texto apenas no primeiro batch (cabeçalho/fornecedor)
+        ctx = bloco_texto if batch_idx == 0 else ""
+        resultado = _visao_batch(client, batch, ctx)
+
+        if resultado:
+            if batch_idx == 0:
+                saldo_anterior = resultado.get("saldo_anterior") or 0.0
+                saldo_anterior_tipo = resultado.get("saldo_anterior_tipo") or ""
+            todos_lancamentos.extend(resultado.get("lancamentos", []))
+            # Mantém os totais do batch que trouxer valores não-zero
+            if resultado.get("total_debito"):
+                total_debito = resultado["total_debito"]
+            if resultado.get("total_credito"):
+                total_credito = resultado["total_credito"]
+
+    if not todos_lancamentos:
+        return None
+
+    return {
+        "saldo_anterior": saldo_anterior,
+        "saldo_anterior_tipo": saldo_anterior_tipo,
+        "total_debito": total_debito,
+        "total_credito": total_credito,
+        "lancamentos": todos_lancamentos,
+    }
 
 
 # ---------------------------------------------------------------------------
