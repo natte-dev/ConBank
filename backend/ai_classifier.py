@@ -1,11 +1,10 @@
 """
 Módulo de IA para o parser de Razão de Fornecedores.
 
-Duas responsabilidades:
-1. parsear_bloco_fornecedor_ia() — parsing completo de um bloco de fornecedor
-   via GPT-4o-mini, usado como substituto robusto ao parser regex.
-2. classificar_lancamentos_incertos() — fallback secundário para lançamentos
-   que o parser regex classificou como DEBITO/CREDITO/OUTRO genérico.
+Responsabilidades:
+1. parsear_bloco_fornecedor_ia() — extração + conciliação de um bloco via gpt-4o
+2. parsear_bloco_fornecedor_ia_visao() — mesmo pipeline, mas via Vision (imagens)
+3. classificar_lancamentos_incertos() — fallback para lançamentos incertos
 """
 import json
 import logging
@@ -17,47 +16,72 @@ logger = logging.getLogger(__name__)
 TIPOS_INCERTOS = {"DEBITO", "CREDITO", "OUTRO"}
 
 # ---------------------------------------------------------------------------
-# Prompt principal — parsing de bloco completo
+# Prompt principal — extração + conciliação em uma única chamada
 # ---------------------------------------------------------------------------
-PARSE_SYSTEM_PROMPT = """Você é um parser especializado em Razão de Fornecedores (contabilidade brasileira).
+PARSE_SYSTEM_PROMPT = """Você é um especialista em conciliação contábil de fornecedores, com foco em análise de razão contábil brasileiro.
 
-Receberá o texto bruto de um bloco de fornecedor extraído de PDF. PDFs diferentes produzem formatos distintos — você deve reconhecer e tratar todos eles.
+Sua tarefa é:
+1. Extrair os lançamentos do bloco de fornecedor (texto ou imagem)
+2. Conciliar compras com pagamentos (por NF direta ou FIFO cronológico)
+3. Retornar o resultado estruturado em JSON
 
-FORMATOS POSSÍVEIS:
+========================
+FORMATOS DE TEXTO POSSÍVEIS
+========================
 
-Formato 1 — linha única (histórico junto com data):
+Formato 1 — linha única (histórico + valores na mesma linha):
   "10/01/2025 4 COMPRAS CONFORME NF. Nº 21100 55 4.524,08 8.654,11C"
   → data=10/01/2025, lote=4, historico="COMPRAS CONFORME NF. Nº 21100", conta_partida=55, valor_credito=4524.08, saldo_apos=8654.11, saldo_tipo=C
 
 Formato 2 — histórico ANTES da linha de data (muito comum em PDFs de tabela):
-  "COMPRA CONFORME NF NÚMERO 1263290 DE 13.101,10C"   ← histórico + saldo (sem data)
+  "COMPRA CONFORME NF NÚMERO 1263290 DE 13.101,10C"   ← histórico + saldo (SEM data — IGNORE o valor aqui)
   "CASSOL MATERIAIS DE CONSTRUCAO LTDA"               ← ruído — IGNORE
-  "26/04/2024 7459 902 13.101,10"                     ← data + lote + CPC + valor
+  "26/04/2024 7459 902 13.101,10"                     ← data + lote + CPC + valor real
   → data=26/04/2024, lote=7459, historico="COMPRA CONFORME NF NÚMERO 1263290 DE", conta_partida=902, valor_credito=13101.10, saldo_apos=13101.10, saldo_tipo=C
 
-Formato 3 — pagamento com histórico intercalado antes do lote:
+Formato 3 — pagamento com histórico repetido intercalado:
   "09/05/2024 SISPAG BOLETO BANCO 341 7715 SISPAG BOLETO BANCO 341 552 4.150,00 SISPAG BOLETO BANCO 341 35.166,01C"
   → data=09/05/2024, lote=7715, historico="SISPAG BOLETO BANCO 341", conta_partida=552, valor_debito=4150.00, saldo_apos=35166.01, saldo_tipo=C
 
-REGRAS OBRIGATÓRIAS:
+========================
+REGRAS DE EXTRAÇÃO
+========================
+
 1. Valores em formato brasileiro (1.234,56) → retorne como float padrão (1234.56)
 2. Ignore linhas que são apenas o nome do fornecedor repetido (ruído do PDF)
 3. DÉBITO (valor_debito > 0) = pagamento: SISPAG, BOLETO, TED, PIX, PGTO, PAGAMENTO, BAIXA, TRANSF, DOC
-4. CRÉDITO (valor_credito > 0) = compra/aquisição: NF, NOTA FISCAL, CT-E, COMPRA, CONFORME, SERVIÇO, AQUISIÇÃO
-5. A linha "SALDO ANTERIOR" indica o saldo inicial do fornecedor
-6. A linha "Total da conta: X Y" → X = total_debito, Y = total_credito. OBRIGATÓRIO: leia esta linha diretamente do texto e retorne os valores exatos — NÃO calcule; se a linha existir, os campos total_debito e total_credito NUNCA devem ser 0.
-7. O saldo crescente com sufixo C = credor; D = devedor
-8. tipo_operacao deve ser: COMPRA, PAGAMENTO, DEVOLUCAO, DEBITO, ou CREDITO
-9. O texto pode conter colunas intercaladas com espaços extras — leia cada linha pela DATA no início (DD/MM/YYYY) para identificar lançamentos válidos
+4. CRÉDITO (valor_credito > 0) = compra: NF, NOTA FISCAL, CT-E, COMPRA, CONFORME, SERVIÇO, AQUISIÇÃO
+5. "SALDO ANTERIOR" → capturar em saldo_anterior + saldo_anterior_tipo
+6. "Total da conta: X Y" → X=total_debito, Y=total_credito. LEIA DIRETAMENTE — não calcule
+7. Saldo com sufixo C=credor, D=devedor
+8. No Formato 2: o valor na linha sem data é o SALDO após, não o valor do lançamento
+9. Não invente valores. Se não tiver certeza, deixe 0
+10. Preserve a ordem cronológica
+11. tipo_operacao: COMPRA | PAGAMENTO | DEVOLUCAO | DEBITO | CREDITO
 
-ATENÇÃO:
-- No Formato 2, o valor que aparece na linha sem data (ex: "13.101,10C") é o SALDO após o lançamento, não o valor do lançamento. O valor do lançamento está na linha com data (ex: "902 13.101,10" — onde 902 é o CPC e 13.101,10 é o valor).
-- Sempre associe o histórico correto a cada data/lote.
+========================
+REGRAS DE CONCILIAÇÃO
+========================
+
+REGRA 1 — Casamento direto por NF:
+  Se um pagamento mencionar explicitamente o número da NF → associe diretamente a essa NF (criterio="regra_1")
+
+REGRA 2 — Baixa cronológica FIFO:
+  Se o pagamento NÃO mencionar NF → aplique na compra mais antiga em aberto:
+  - pagamento < saldo da compra → parcialmente_paga
+  - pagamento = saldo da compra → paga
+  - pagamento > saldo da compra → quite a atual, aplique restante na próxima (criterio="regra_2")
+
+IMPORTANTE: trate cada linha de compra individualmente (não agrupe NFs iguais automaticamente)
+
+========================
+SAÍDA OBRIGATÓRIA (JSON)
+========================
 
 Retorne APENAS JSON válido, sem comentários:
 {
   "saldo_anterior": 0.0,
-  "saldo_anterior_tipo": "",
+  "saldo_anterior_tipo": "C ou D ou vazio",
   "total_debito": 0.0,
   "total_credito": 0.0,
   "lancamentos": [
@@ -72,7 +96,33 @@ Retorne APENAS JSON válido, sem comentários:
       "saldo_tipo": "C ou D ou vazio",
       "tipo_operacao": "COMPRA"
     }
-  ]
+  ],
+  "conciliacao": [
+    {
+      "nf": "string ou null",
+      "data_compra": "DD/MM/YYYY",
+      "valor_original": 0.0,
+      "valor_pago": 0.0,
+      "saldo_em_aberto": 0.0,
+      "status": "paga | parcialmente_paga | em_aberto",
+      "pagamentos": [
+        {
+          "data": "DD/MM/YYYY",
+          "valor": 0.0,
+          "criterio": "regra_1 | regra_2"
+        }
+      ]
+    }
+  ],
+  "resumo": {
+    "total_compras": 0.0,
+    "total_pagamentos": 0.0,
+    "saldo_em_aberto": 0.0
+  },
+  "validacao": {
+    "saldo_confere": true,
+    "observacoes": []
+  }
 }"""
 
 # ---------------------------------------------------------------------------

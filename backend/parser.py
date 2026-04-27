@@ -772,10 +772,21 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
 
     lancamentos = _recuperar_lancamentos_ocultos(lancamentos, linhas)
 
+    # Captura conciliação, resumo e validação retornados pela IA (novo prompt)
+    conciliacao_ia = dados_ia.get("conciliacao") or []
+    resumo_ia      = dados_ia.get("resumo") or {}
+    validacao_ia   = dados_ia.get("validacao") or {}
+
+    if validacao_ia.get("observacoes"):
+        for obs in validacao_ia["observacoes"]:
+            logger.warning("📋 Validação IA: %s", obs)
+
     print(
         f"✅ IA parseou bloco: {len(lancamentos)} lançamentos, "
         f"débito={float(dados_ia.get('total_debito') or 0):.2f}, "
-        f"crédito={float(dados_ia.get('total_credito') or 0):.2f}"
+        f"crédito={float(dados_ia.get('total_credito') or 0):.2f}, "
+        f"conciliação: {len(conciliacao_ia)} NFs, "
+        f"saldo_confere={validacao_ia.get('saldo_confere', '?')}"
     )
 
     return {
@@ -787,6 +798,9 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
         "total_debito": _ia_decimal(dados_ia.get("total_debito")),
         "total_credito": _ia_decimal(dados_ia.get("total_credito")),
         "lancamentos": lancamentos,
+        "conciliacao_ia": conciliacao_ia,   # conciliação feita pela IA
+        "resumo_ia": resumo_ia,             # totais calculados pela IA
+        "validacao_ia": validacao_ia,       # saldo_confere + observacoes
     }
 
 
