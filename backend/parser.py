@@ -790,86 +790,147 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
     }
 
 
+def _renderizar_paginas_pdf(arquivo_bytes: bytes, page_indices: List[int]) -> List[bytes]:
+    """Renderiza páginas do PDF como PNG bytes usando PyMuPDF (sem dependências de sistema)."""
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=arquivo_bytes, filetype="pdf")
+        resultado = []
+        for idx in page_indices:
+            if 0 <= idx < len(doc):
+                pag = doc[idx]
+                pix = pag.get_pixmap(dpi=150)
+                resultado.append(pix.tobytes("png"))
+        doc.close()
+        return resultado
+    except ImportError:
+        print("⚠️ pymupdf não instalado — Vision desativado. Execute: pip install pymupdf")
+        return []
+    except Exception as e:
+        print(f"⚠️ Falha ao renderizar páginas {page_indices}: {e}")
+        return []
+
+
 def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
     """
-    Função principal que parseia todo o arquivo PDF
+    Função principal: parseia todo o arquivo PDF usando IA.
+    Pipeline: pdfplumber (texto) → GPT-4o-mini texto → GPT-4o-mini Vision (fallback).
+    O parser regex foi removido — a IA cobre todos os formatos.
     """
-    # Calcular hash
     hash_arquivo = calcular_hash_arquivo(arquivo_bytes)
-    
-    # Detectar formato do arquivo
     formato = detectar_formato_arquivo(arquivo_bytes)
     print(f"🔍 Formato detectado: {formato}")
-    
+
     if formato != 'PDF':
         raise ValueError(
             f"Formato '{formato}' não suportado nesta versão. "
-            "Este parser funciona apenas com PDFs que contenham texto extraível. "
-            "Se você tem um ZIP ou imagens escaneadas, será necessário OCR."
+            "Este parser funciona apenas com arquivos PDF."
         )
-    
-    # Extrair texto do PDF
-    print("📖 Extraindo texto do PDF...")
-    texto_completo = extrair_texto_pdf(arquivo_bytes)
-    
-    if not texto_completo or len(texto_completo) < 100:
-        raise ValueError(
-            "Não foi possível extrair texto do PDF. "
-            "O arquivo pode estar vazio, corrompido ou ser uma imagem escaneada. "
-            "Para imagens escaneadas, será necessário OCR."
-        )
-    
-    print(f"✅ Texto extraído: {len(texto_completo)} caracteres")
-    
-    # Importação lazy para evitar dependência circular em testes
-    from ai_classifier import parsear_bloco_fornecedor_ia
 
-    # Processar o texto extraído
-    fornecedores = []
-    fornecedor_atual = []
-    blocos_ia = 0
-    blocos_regex = 0
+    print("📖 Extraindo texto do PDF...")
+
+    # ── Extração por página (mantém referência de página para o Vision fallback) ──
+    paginas_dados: List[tuple] = []  # (texto, page_idx_0based)
+    try:
+        with pdfplumber.open(BytesIO(arquivo_bytes)) as pdf:
+            total_paginas = len(pdf.pages)
+            print(f"📄 PDF detectado: {total_paginas} páginas")
+            for i, pagina in enumerate(pdf.pages):
+                texto_layout = pagina.extract_text(layout=True) or ""
+                texto_words  = _extrair_pagina_por_palavras(pagina)
+                texto = texto_layout if len(texto_layout) >= len(texto_words) else texto_words
+                if not texto:
+                    texto = pagina.extract_text() or ""
+                paginas_dados.append((texto, i))
+                if (i + 1) % 10 == 0:
+                    print(f"   Processadas {i+1}/{total_paginas} páginas...")
+            print(f"✅ Extração concluída: {len(paginas_dados)} páginas com texto")
+    except Exception as e:
+        raise ValueError(f"Erro ao extrair texto do PDF: {str(e)}")
+
+    texto_completo = "\n\n".join(t for t, _ in paginas_dados)
+    if not texto_completo or len(texto_completo) < 20:
+        # PDF completamente vazio — nem estrutura (Conta:) conseguimos detectar
+        logger.warning(
+            "⚠️ PDF com texto muito escasso (%d chars) — Vision tentará mesmo assim",
+            len(texto_completo or ""),
+        )
+    print(f"✅ Texto extraído: {len(texto_completo)} caracteres")
+
+    # ── Mapeamento linha → índice de página (para o Vision fallback) ──
+    linha_para_pagina: Dict[int, int] = {}
+    ln = 0
+    for pg_idx, (texto, _) in enumerate(paginas_dados):
+        for _ in texto.split('\n'):
+            linha_para_pagina[ln] = pg_idx
+            ln += 1
+        if pg_idx < len(paginas_dados) - 1:
+            ln += 1  # linha vazia do separador "\n\n"
+
+    from ai_classifier import parsear_bloco_fornecedor_ia, parsear_bloco_fornecedor_ia_visao
+
+    fornecedores: List[Dict] = []
+    blocos_ia_texto = 0
+    blocos_ia_visao = 0
 
     linhas = texto_completo.split('\n')
 
-    def _processar_bloco(linhas_bloco: List[str]) -> None:
-        nonlocal blocos_ia, blocos_regex
+    def _tem_valores(lancamentos: list) -> bool:
+        """True se ao menos um lançamento tem valor não-zero."""
+        return any(
+            float(l.get("valor_credito") or 0) + float(l.get("valor_debito") or 0) > 0
+            for l in lancamentos
+        )
+
+    def _processar_bloco(linhas_bloco: List[str], linha_inicio: int) -> None:
+        nonlocal blocos_ia_texto, blocos_ia_visao
         if not linhas_bloco:
             return
 
         bloco_texto = '\n'.join(linhas_bloco)
 
-        # Tentativa 1: parser IA
+        # ── Tentativa 1: Vision (primário — lê imagem da página, ignora texto garbled) ──
+        page_indices = sorted({
+            linha_para_pagina[i]
+            for i in range(linha_inicio, linha_inicio + len(linhas_bloco))
+            if i in linha_para_pagina
+        })
+        if page_indices:
+            print(f"👁️ Vision (págs {page_indices})...")
+            png_list = _renderizar_paginas_pdf(arquivo_bytes, page_indices)
+            if png_list:
+                dados_visao = parsear_bloco_fornecedor_ia_visao(png_list, bloco_texto)
+                if dados_visao and _tem_valores(dados_visao.get("lancamentos", [])):
+                    fornecedor = _construir_fornecedor_de_ia(dados_visao, linhas_bloco)
+                    if fornecedor:
+                        fornecedores.append(fornecedor)
+                        blocos_ia_visao += 1
+                        return
+
+        # ── Tentativa 2: IA com texto (fallback quando Vision falha ou sem imagens) ──
         dados_ia = parsear_bloco_fornecedor_ia(bloco_texto)
-        if dados_ia:
+        if dados_ia and _tem_valores(dados_ia.get("lancamentos", [])):
             fornecedor = _construir_fornecedor_de_ia(dados_ia, linhas_bloco)
             if fornecedor:
                 fornecedores.append(fornecedor)
-                blocos_ia += 1
+                blocos_ia_texto += 1
                 return
 
-        # Tentativa 2: parser regex (fallback)
-        fornecedor = parsear_fornecedor(linhas_bloco)
-        if fornecedor:
-            fornecedores.append(fornecedor)
-            blocos_regex += 1
-        else:
-            logger.warning(
-                "⚠️ Bloco descartado (IA e regex falharam): %d linhas | primeiras: %s",
-                len(linhas_bloco),
-                linhas_bloco[:3],
-            )
+        logger.warning(
+            "⚠️ Bloco descartado (Vision+texto falharam): %d linhas | primeiras: %s",
+            len(linhas_bloco), linhas_bloco[:3],
+        )
 
-    for linha in linhas:
+    fornecedor_atual: List[str] = []
+    linha_inicio_atual = 0
+    for i, linha in enumerate(linhas):
         linha = linha.strip()
-
         if linha.startswith('Conta:'):
-            _processar_bloco(fornecedor_atual)
+            _processar_bloco(fornecedor_atual, linha_inicio_atual)
             fornecedor_atual = []
-
+            linha_inicio_atual = i
         fornecedor_atual.append(linha)
-
-    _processar_bloco(fornecedor_atual)
+    _processar_bloco(fornecedor_atual, linha_inicio_atual)
     
     # CONSOLIDAR FORNECEDORES DUPLICADOS (quebrados entre páginas)
     print(f"📋 Total de registros antes da consolidação: {len(fornecedores)}")
@@ -899,7 +960,7 @@ def parsear_arquivo_razao(arquivo_bytes: bytes) -> Dict:
     
     print(
         f"✅ Processamento concluído: {len(fornecedores)} fornecedores "
-        f"(IA: {blocos_ia} | regex: {blocos_regex})"
+        f"(Vision: {blocos_ia_visao} | texto: {blocos_ia_texto})"
     )
     
     return {

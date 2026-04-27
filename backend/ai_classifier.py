@@ -162,6 +162,78 @@ def parsear_bloco_fornecedor_ia(bloco_texto: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Parsing via Vision (fallback para texto garbled)
+# ---------------------------------------------------------------------------
+def parsear_bloco_fornecedor_ia_visao(png_bytes_list: list, bloco_texto: str = "") -> Optional[dict]:
+    """
+    Envia imagens de página(s) ao GPT-4o-mini Vision e retorna o mesmo formato
+    de parsear_bloco_fornecedor_ia(). Usado quando o texto extraído está garbled.
+    png_bytes_list: lista de bytes PNG (uma entrada por página).
+    """
+    import base64
+
+    if not png_bytes_list:
+        return None
+
+    client = _get_client()
+    if client is None:
+        return None
+
+    content: list = []
+
+    # Contexto textual (pode ter NF numbers mesmo garbled — ajuda a IA)
+    if bloco_texto and len(bloco_texto.strip()) > 20:
+        content.append({
+            "type": "text",
+            "text": (
+                "Texto extraído (pode estar corrompido — use as imagens como fonte primária):\n"
+                + bloco_texto[:800]
+                + "\n\nAnalise as imagens e extraia os lançamentos:"
+            ),
+        })
+
+    for png in png_bytes_list[:3]:  # máx 3 páginas por chamada
+        b64 = base64.b64encode(png).decode()
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"},
+        })
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": PARSE_SYSTEM_PROMPT},
+                {"role": "user",   "content": content},
+            ],
+            max_tokens=16000,
+            temperature=0,
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        if not isinstance(data.get("lancamentos"), list):
+            logger.warning("⚠️ Vision IA retornou JSON sem 'lancamentos'.")
+            return None
+
+        usage = response.usage
+        n_lanc = len(data.get("lancamentos", []))
+        print(
+            f"👁️ Vision IA: {n_lanc} lançamentos | "
+            f"débito={data.get('total_debito')} | crédito={data.get('total_credito')} | "
+            f"tokens: {usage.prompt_tokens if usage else 0}in/"
+            f"{usage.completion_tokens if usage else 0}out"
+        )
+        if n_lanc > 0:
+            print(f"   Primeiro (vision): {data['lancamentos'][0]}")
+        return data
+
+    except Exception as exc:
+        logger.warning("⚠️ parsear_bloco_fornecedor_ia_visao falhou: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Classificação secundária de lançamentos incertos
 # ---------------------------------------------------------------------------
 def classificar_lancamentos_incertos(lancamentos: list) -> None:
