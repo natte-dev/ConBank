@@ -155,6 +155,29 @@ const styles = `
     background: rgba(59, 130, 246, 0.08);
   }
 
+  .upload-progresso {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: 8px;
+    color: #3b82f6;
+    font-size: 0.875rem;
+  }
+  .upload-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(59, 130, 246, 0.3);
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    flex-shrink: 0;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .upload-icon {
     width: 48px;
     height: 48px;
@@ -827,6 +850,7 @@ function App() {
   const [carregandoFifo, setCarregandoFifo] = useState(false)
   const [nfExpandida, setNfExpandida] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgresso, setUploadProgresso] = useState<string | null>(null)
   const [statusFiltro, setStatusFiltro] = useState<string>('')
   const [busca, setBusca] = useState('')
   const [erro, setErro] = useState<string | null>(null)
@@ -887,13 +911,35 @@ function App() {
     try {
       setUploading(true)
       setErro(null)
-      await apiService.uploadArquivo(file)
-      await carregarArquivos()
+      setUploadProgresso('Enviando arquivo...')
+
+      const resposta = await apiService.uploadArquivo(file)
       event.target.value = ''
+
+      // Se o backend ainda está processando, faz polling até concluir
+      if (resposta.status === 'PROCESSANDO') {
+        setUploadProgresso('Processando PDF com IA... (pode levar alguns minutos)')
+        await apiService.aguardarProcessamento(
+          resposta.arquivo_id,
+          (status, totalFornecedores) => {
+            if (status === 'PROCESSANDO') {
+              setUploadProgresso(
+                totalFornecedores > 0
+                  ? `Processando... ${totalFornecedores} fornecedores encontrados até agora`
+                  : 'Processando PDF com IA... (pode levar alguns minutos)'
+              )
+            }
+          }
+        )
+      }
+
+      setUploadProgresso(null)
+      await carregarArquivos()
     } catch (error: any) {
       console.error('Erro no upload:', error)
-      const errorDetail = error.response?.data?.detail || 'Erro desconhecido'
+      const errorDetail = error.response?.data?.detail || error.message || 'Erro desconhecido'
       setErro(errorDetail)
+      setUploadProgresso(null)
       event.target.value = ''
     } finally {
       setUploading(false)
@@ -981,8 +1027,8 @@ function App() {
         </div>
 
         <div className="upload-section">
-          <label htmlFor="fileInput" style={{ cursor: 'pointer' }}>
-            <div className="upload-area">
+          <label htmlFor="fileInput" style={{ cursor: uploading ? 'not-allowed' : 'pointer' }}>
+            <div className="upload-area" style={{ opacity: uploading ? 0.6 : 1 }}>
               <Upload className="upload-icon" />
               <h3>Importar PDF</h3>
               <p>Clique para selecionar um arquivo</p>
@@ -997,6 +1043,13 @@ function App() {
             disabled={uploading}
             style={{ display: 'none' }}
           />
+
+          {uploading && uploadProgresso && (
+            <div className="upload-progresso">
+              <div className="upload-spinner" />
+              <span>{uploadProgresso}</span>
+            </div>
+          )}
 
           {erro && (
             <div className="error">

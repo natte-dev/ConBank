@@ -8,7 +8,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120_000, // 2 min — uploads de PDF podem demorar
+  timeout: 30_000, // 30s — upload retorna imediatamente; polling cuida do resto
 });
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -126,7 +126,24 @@ export const apiService = {
     const { data } = await api.post('/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
-    return data;
+    return data; // { success, arquivo_id, status: "PROCESSANDO" | "CONCLUIDO" }
+  },
+
+  aguardarProcessamento: async (
+    arquivoId: number,
+    onProgresso?: (status: string, total_fornecedores: number) => void,
+  ): Promise<{ status: string; total_fornecedores: number; total_lancamentos: number }> => {
+    const INTERVALO_MS = 5_000;
+    const TIMEOUT_MS   = 30 * 60 * 1000; // 30 min máximo
+    const inicio = Date.now();
+
+    while (Date.now() - inicio < TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, INTERVALO_MS));
+      const { data } = await api.get(`/arquivos/${arquivoId}/status`);
+      onProgresso?.(data.status, data.total_fornecedores ?? 0);
+      if (data.status === 'CONCLUIDO' || data.status === 'ERRO') return data;
+    }
+    throw new Error('Timeout aguardando processamento do arquivo');
   },
 
   listarArquivos: async (): Promise<Arquivo[]> => {

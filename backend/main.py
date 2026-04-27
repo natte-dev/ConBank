@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ai_classifier import classificar_lancamentos_incertos
 from conciliacao_intel import conciliar_todos_fornecedores_inteligente
 from consolidador import consolidar_todos_fornecedores
-from database import get_db, init_db
+from database import SessionLocal, get_db, init_db
 from models import ArquivoImportado, ConciliacaoInterna, Divergencia, Fornecedor, LancamentoFornecedor
 from parser import calcular_hash_arquivo, parsear_arquivo_razao
 
@@ -124,12 +124,131 @@ async def health_check(db: Session = Depends(get_db)):
 # UPLOAD E PROCESSAMENTO
 # ============================================================================
 
+def _processar_arquivo_background(arquivo_id: int, conteudo: bytes) -> None:
+    """
+    Processamento pesado em background — usa sessão própria (não a da request).
+    Chamado pelo BackgroundTasks do FastAPI após o upload retornar ao cliente.
+    """
+    db = SessionLocal()
+    try:
+        arquivo = db.query(ArquivoImportado).filter(ArquivoImportado.id == arquivo_id).first()
+        if not arquivo:
+            logger.error("❌ Background: arquivo_id=%d não encontrado", arquivo_id)
+            return
+
+        dados = parsear_arquivo_razao(conteudo)
+        dados = consolidar_todos_fornecedores(dados)
+
+        incertos = [
+            lanc
+            for forn in dados["fornecedores"]
+            for lanc in forn.get("lancamentos", [])
+            if lanc.get("classificacao_incerta")
+        ]
+        if incertos:
+            logger.info("🤖 Enviando %d lançamentos incertos para classificação IA…", len(incertos))
+            classificar_lancamentos_incertos(incertos)
+
+        arquivo.data_inicio        = _converter_data_br(dados.get("periodo_inicio"))
+        arquivo.data_fim           = _converter_data_br(dados.get("periodo_fim"))
+        arquivo.empresa            = dados.get("empresa")
+        arquivo.cnpj_empresa       = dados.get("cnpj")
+        arquivo.total_fornecedores = dados.get("total_fornecedores", len(dados["fornecedores"]))
+        arquivo.total_lancamentos  = dados.get(
+            "total_lancamentos",
+            sum(len(f.get("lancamentos", [])) for f in dados["fornecedores"]),
+        )
+
+        logger.info("💾 Inserindo %d fornecedores…", len(dados["fornecedores"]))
+
+        for idx, forn_data in enumerate(dados["fornecedores"], 1):
+            if idx % 50 == 0:
+                logger.info("   Processados %d / %d", idx, len(dados["fornecedores"]))
+
+            saldo_anterior = Decimal(str(forn_data.get("saldo_anterior", 0)))
+            total_credito  = Decimal(str(forn_data.get("total_credito", 0)))
+            total_debito   = Decimal(str(forn_data.get("total_debito", 0)))
+
+            fornecedor = Fornecedor(
+                arquivo_origem_id   = arquivo.id,
+                codigo_conta        = forn_data["codigo_conta"],
+                conta_contabil      = forn_data["conta_contabil"],
+                nome_fornecedor     = forn_data["nome_fornecedor"],
+                saldo_anterior      = saldo_anterior,
+                saldo_anterior_tipo = forn_data.get("saldo_anterior_tipo", ""),
+                total_debito        = total_debito,
+                total_credito       = total_credito,
+                saldo_final         = saldo_anterior + total_credito - total_debito,
+            )
+            db.add(fornecedor)
+            db.flush()
+
+            for lanc_data in forn_data.get("lancamentos", []):
+                vd    = Decimal(str(lanc_data["valor_debito"]))
+                vc    = Decimal(str(lanc_data["valor_credito"]))
+                saldo = Decimal(str(lanc_data["saldo_apos_lancamento"]))
+
+                db.add(LancamentoFornecedor(
+                    fornecedor_id         = fornecedor.id,
+                    data_lancamento       = lanc_data["data_lancamento"],
+                    lote                  = lanc_data.get("lote"),
+                    historico             = lanc_data["historico"],
+                    conta_partida         = lanc_data.get("conta_partida"),
+                    valor_debito          = vd,
+                    valor_credito         = vc,
+                    saldo_apos_lancamento = saldo,
+                    saldo_tipo            = lanc_data.get("saldo_tipo", ""),
+                    tipo_operacao         = lanc_data["tipo_operacao"],
+                    numero_nf             = lanc_data.get("numero_nf"),
+                    cnpj_historico        = lanc_data.get("cnpj_historico"),
+                    valor_saldo           = vc if lanc_data["tipo_operacao"] == "COMPRA" else Decimal("0"),
+                    classificado_por_ia   = lanc_data.get("classificado_por_ia", False),
+                ))
+
+        db.commit()
+        logger.info("✅ Dados salvos no banco.")
+
+        logger.info("🔄 Iniciando conciliação inteligente…")
+        conciliar_todos_fornecedores_inteligente(db, arquivo.id)
+
+        for forn in db.query(Fornecedor).filter(Fornecedor.arquivo_origem_id == arquivo.id).all():
+            forn.valor_a_pagar = forn.total_credito - forn.total_debito
+            if abs(forn.valor_a_pagar) <= Decimal("0.01"):
+                forn.status_pagamento = "QUITADO"
+            elif forn.valor_a_pagar < 0:
+                forn.status_pagamento = "ADIANTADO"
+            else:
+                forn.status_pagamento = "EM_ABERTO"
+
+        arquivo.status = "CONCLUIDO"
+        db.commit()
+        logger.info("✅ Processamento concluído para arquivo_id=%d", arquivo_id)
+
+    except Exception as exc:
+        logger.error("❌ Background: erro no arquivo_id=%d:\n%s", arquivo_id, traceback.format_exc())
+        try:
+            arquivo = db.query(ArquivoImportado).filter(ArquivoImportado.id == arquivo_id).first()
+            if arquivo:
+                arquivo.status = "ERRO"
+                arquivo.mensagem_erro = str(exc)
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @app.post("/upload")
 async def upload_arquivo(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    """Upload e processamento do arquivo PDF/ZIP do Razão de Fornecedores."""
+    """
+    Recebe o PDF e retorna IMEDIATAMENTE com arquivo_id e status=PROCESSANDO.
+    O parsing pesado (Vision + IA) roda em background sem bloquear o cliente.
+    O frontend deve consultar GET /arquivos/{id}/status para acompanhar.
+    """
     try:
         conteudo = await file.read()
         hash_arquivo = calcular_hash_arquivo(conteudo)
@@ -147,119 +266,35 @@ async def upload_arquivo(
         db.commit()
         db.refresh(arquivo)
 
-        try:
-            dados = parsear_arquivo_razao(conteudo)
-            dados = consolidar_todos_fornecedores(dados)
+        # Inicia o processamento pesado em background (não bloqueia o response)
+        background_tasks.add_task(_processar_arquivo_background, arquivo.id, conteudo)
 
-            # Coletar lançamentos com classificação incerta e reclassificar via IA
-            incertos = [
-                lanc
-                for forn in dados["fornecedores"]
-                for lanc in forn.get("lancamentos", [])
-                if lanc.get("classificacao_incerta")
-            ]
-            if incertos:
-                logger.info("🤖 Enviando %d lançamentos incertos para classificação IA…", len(incertos))
-                classificar_lancamentos_incertos(incertos)
-
-            arquivo.data_inicio   = _converter_data_br(dados.get("periodo_inicio"))
-            arquivo.data_fim      = _converter_data_br(dados.get("periodo_fim"))
-            arquivo.empresa       = dados.get("empresa")
-            arquivo.cnpj_empresa  = dados.get("cnpj")
-            arquivo.total_fornecedores = dados.get("total_fornecedores", len(dados["fornecedores"]))
-            arquivo.total_lancamentos  = dados.get(
-                "total_lancamentos",
-                sum(len(f.get("lancamentos", [])) for f in dados["fornecedores"]),
-            )
-
-            logger.info("💾 Inserindo %d fornecedores…", len(dados["fornecedores"]))
-
-            for idx, forn_data in enumerate(dados["fornecedores"], 1):
-                if idx % 50 == 0:
-                    logger.info("   Processados %d / %d", idx, len(dados["fornecedores"]))
-
-                saldo_anterior = Decimal(str(forn_data.get("saldo_anterior", 0)))
-                total_credito  = Decimal(str(forn_data.get("total_credito", 0)))
-                total_debito   = Decimal(str(forn_data.get("total_debito", 0)))
-
-                fornecedor = Fornecedor(
-                    arquivo_origem_id   = arquivo.id,
-                    codigo_conta        = forn_data["codigo_conta"],
-                    conta_contabil      = forn_data["conta_contabil"],
-                    nome_fornecedor     = forn_data["nome_fornecedor"],
-                    saldo_anterior      = saldo_anterior,
-                    saldo_anterior_tipo = forn_data.get("saldo_anterior_tipo", ""),
-                    total_debito        = total_debito,
-                    total_credito       = total_credito,
-                    saldo_final         = saldo_anterior + total_credito - total_debito,
-                )
-                db.add(fornecedor)
-                db.flush()
-
-                for lanc_data in forn_data.get("lancamentos", []):
-                    vd     = Decimal(str(lanc_data["valor_debito"]))
-                    vc     = Decimal(str(lanc_data["valor_credito"]))
-                    saldo  = Decimal(str(lanc_data["saldo_apos_lancamento"]))
-
-                    db.add(LancamentoFornecedor(
-                        fornecedor_id         = fornecedor.id,
-                        data_lancamento       = lanc_data["data_lancamento"],
-                        lote                  = lanc_data.get("lote"),
-                        historico             = lanc_data["historico"],
-                        conta_partida         = lanc_data.get("conta_partida"),
-                        valor_debito          = vd,
-                        valor_credito         = vc,
-                        saldo_apos_lancamento = saldo,
-                        saldo_tipo            = lanc_data.get("saldo_tipo", ""),
-                        tipo_operacao         = lanc_data["tipo_operacao"],
-                        numero_nf             = lanc_data.get("numero_nf"),
-                        cnpj_historico        = lanc_data.get("cnpj_historico"),
-                        valor_saldo           = vc if lanc_data["tipo_operacao"] == "COMPRA" else Decimal("0"),
-                        classificado_por_ia   = lanc_data.get("classificado_por_ia", False),
-                    ))
-
-            db.commit()
-            logger.info("✅ Dados salvos no banco.")
-
-            logger.info("🔄 Iniciando conciliação inteligente…")
-            conciliar_todos_fornecedores_inteligente(db, arquivo.id)
-
-            for forn in db.query(Fornecedor).filter(Fornecedor.arquivo_origem_id == arquivo.id).all():
-                forn.valor_a_pagar = forn.total_credito - forn.total_debito
-                if abs(forn.valor_a_pagar) <= Decimal("0.01"):
-                    forn.status_pagamento = "QUITADO"
-                elif forn.valor_a_pagar < 0:
-                    forn.status_pagamento = "ADIANTADO"
-                else:
-                    forn.status_pagamento = "EM_ABERTO"
-
-            arquivo.status = "CONCLUIDO"
-            db.commit()
-            logger.info("✅ Processamento concluído para arquivo_id=%d", arquivo.id)
-
-            return {
-                "success": True,
-                "arquivo_id": arquivo.id,
-                "message": "Arquivo processado com sucesso",
-                "dados": {
-                    "total_fornecedores": arquivo.total_fornecedores,
-                    "total_lancamentos":  arquivo.total_lancamentos,
-                    "periodo_inicio": arquivo.data_inicio.isoformat() if arquivo.data_inicio else None,
-                    "periodo_fim":    arquivo.data_fim.isoformat()    if arquivo.data_fim    else None,
-                },
-            }
-
-        except Exception as exc:
-            logger.error("❌ Erro durante processamento:\n%s", traceback.format_exc())
-            arquivo.status = "ERRO"
-            arquivo.mensagem_erro = str(exc)
-            db.commit()
-            raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {exc}")
+        return {
+            "success": True,
+            "arquivo_id": arquivo.id,
+            "status": "PROCESSANDO",
+            "message": "Arquivo recebido. Processamento em andamento — consulte o status para acompanhar.",
+        }
 
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/arquivos/{arquivo_id}/status")
+async def status_arquivo(arquivo_id: int, db: Session = Depends(get_db)):
+    """Retorna o status atual do processamento de um arquivo."""
+    arquivo = db.query(ArquivoImportado).filter(ArquivoImportado.id == arquivo_id).first()
+    if not arquivo:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    return {
+        "id":                  arquivo.id,
+        "status":              arquivo.status,
+        "total_fornecedores":  arquivo.total_fornecedores or 0,
+        "total_lancamentos":   arquivo.total_lancamentos or 0,
+        "mensagem_erro":       getattr(arquivo, "mensagem_erro", None),
+    }
 
 
 # ============================================================================
