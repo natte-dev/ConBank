@@ -134,7 +134,7 @@ def parsear_bloco_fornecedor_ia(bloco_texto: str) -> Optional[dict]:
                 {"role": "system", "content": PARSE_SYSTEM_PROMPT},
                 {"role": "user", "content": bloco_texto},
             ],
-            max_tokens=8192,
+            max_tokens=16000,
             temperature=0,
         )
 

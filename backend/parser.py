@@ -434,9 +434,14 @@ def extrair_texto_pdf(arquivo_bytes: bytes) -> str:
             print(f"📄 PDF detectado: {total_paginas} páginas")
 
             for i, pagina in enumerate(pdf.pages, 1):
-                texto = _extrair_pagina_por_palavras(pagina)
+                # layout=True usa pdfminer LAParams — melhor separação de colunas em
+                # PDFs onde extract_words agrupa chars intercalados em palavras garbled.
+                texto_layout = pagina.extract_text(layout=True) or ""
+                texto_words  = _extrair_pagina_por_palavras(pagina)
+                # Prefere o método que produz mais caracteres
+                texto = texto_layout if len(texto_layout) >= len(texto_words) else texto_words
                 if not texto:
-                    texto = pagina.extract_text(layout=True) or ""
+                    texto = pagina.extract_text() or ""
                 if texto:
                     texto_completo.append(texto)
 
@@ -700,20 +705,56 @@ def _recuperar_lancamentos_ocultos(lancamentos: List[Dict], linhas_bloco: List[s
     return resultado
 
 
+def _parece_nome_fornecedor(linha: str) -> bool:
+    """Heurística: linha limpa de nome de fornecedor (uppercase, sem interleaving digit-letra)."""
+    linha = linha.strip()
+    if not linha or len(linha) < 4:
+        return False
+    if re.search(r'(?:\d[A-Z]){3}|(?:[A-Z]\d){3}', linha):
+        return False  # texto garbled com interleaving
+    if re.match(r'^[\d.,/\s]+$', linha):
+        return False  # só números/datas
+    return sum(c.isalpha() for c in linha) >= 4
+
+
 def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[Dict]:
     """
     Combina o header do fornecedor (extraído por regex da linha 'Conta:')
     com os dados financeiros retornados pela IA.
+    Suporta dois formatos:
+      - "Conta: 1667 - 2.1.3.01.0002 CASSOL..." (tudo na mesma linha)
+      - "Conta:" (vazio) + nome do fornecedor na linha seguinte (PDFs multi-coluna)
     """
-    conta_match = None
+    codigo_conta = None
+    conta_contabil = None
+    nome_fornecedor = None
+
     for linha in linhas:
         m = re.match(r"Conta:\s*(\d+)\s*(?:-\s*)?([\d.]+)\s+(.+)$", linha.strip())
         if m:
-            conta_match = m
+            codigo_conta = m.group(1)
+            conta_contabil = m.group(2)
+            nome_fornecedor = m.group(3).strip()
             break
 
-    if not conta_match:
-        return None
+    if not codigo_conta:
+        # Fallback: "Conta:" sozinho → busca nome do fornecedor nas próximas linhas
+        for i, linha in enumerate(linhas):
+            if re.match(r"Conta:\s*$", linha.strip()):
+                for j in range(i + 1, min(i + 6, len(linhas))):
+                    candidata = re.sub(r'\s+', ' ', linhas[j].strip())
+                    if _parece_nome_fornecedor(candidata):
+                        nome_fornecedor = candidata
+                        break
+                break
+
+        if not nome_fornecedor:
+            return None
+
+        h = hashlib.md5(nome_fornecedor.upper().encode()).hexdigest()
+        codigo_conta = h[:6]
+        conta_contabil = "0.0.0.00.0000"
+        print(f"⚠️ Conta: vazia — usando nome '{nome_fornecedor}' com código gerado {codigo_conta}")
 
     lancamentos = []
     for lanc_ia in dados_ia.get("lancamentos", []):
@@ -738,9 +779,9 @@ def _construir_fornecedor_de_ia(dados_ia: dict, linhas: List[str]) -> Optional[D
     )
 
     return {
-        "codigo_conta": conta_match.group(1),
-        "conta_contabil": conta_match.group(2),
-        "nome_fornecedor": conta_match.group(3).strip(),
+        "codigo_conta": codigo_conta,
+        "conta_contabil": conta_contabil,
+        "nome_fornecedor": nome_fornecedor,
         "saldo_anterior": _ia_decimal(dados_ia.get("saldo_anterior")),
         "saldo_anterior_tipo": str(dados_ia.get("saldo_anterior_tipo") or ""),
         "total_debito": _ia_decimal(dados_ia.get("total_debito")),
