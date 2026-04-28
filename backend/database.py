@@ -69,8 +69,28 @@ def init_db() -> None:
     from models import Base
     Base.metadata.create_all(bind=engine)
 
-    # Valida que a conexão realmente funciona
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
+    # ── Migrations idempotentes — alarga colunas que cresceram ────────────────
+    # Usar bloco DO anônimo para ignorar erro se a coluna já tiver o tamanho correto.
+    _migrations = [
+        # lote: VARCHAR(10) → VARCHAR(50)  (lotes como '2500000002616' têm 13+ chars)
+        """
+        DO $$ BEGIN
+            ALTER TABLE lancamento_fornecedor
+                ALTER COLUMN lote TYPE VARCHAR(50);
+        EXCEPTION WHEN others THEN NULL; END $$;
+        """,
+        # conta_partida: VARCHAR(10) → VARCHAR(20)
+        """
+        DO $$ BEGIN
+            ALTER TABLE lancamento_fornecedor
+                ALTER COLUMN conta_partida TYPE VARCHAR(20);
+        EXCEPTION WHEN others THEN NULL; END $$;
+        """,
+    ]
 
-    logger.info("✅ Banco de dados: tabelas verificadas/criadas, conexão OK.")
+    with engine.begin() as conn:
+        conn.execute(text("SELECT 1"))  # valida conexão
+        for sql in _migrations:
+            conn.execute(text(sql))
+
+    logger.info("✅ Banco de dados: tabelas verificadas/criadas, migrations aplicadas, conexão OK.")

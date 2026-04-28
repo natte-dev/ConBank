@@ -83,9 +83,9 @@ class LancamentoFornecedor(Base):
     
     # Dados do lançamento
     data_lancamento = Column(Date, nullable=False)
-    lote = Column(String(10))
+    lote = Column(String(50))
     historico = Column(Text, nullable=False)
-    conta_partida = Column(String(10))
+    conta_partida = Column(String(20))
     
     # Valores
     valor_debito = Column(Numeric(15, 2), default=0)
