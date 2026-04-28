@@ -181,13 +181,16 @@ def _processar_arquivo_background(arquivo_id: int, conteudo: bytes) -> None:
             total_debito  = total_debito_calc  if total_debito_calc  > 0 else total_debito_ia
             total_credito = total_credito_calc if total_credito_calc > 0 else total_credito_ia
 
+            # saldo_anterior_tipo é VARCHAR(1) — garantir que não ultrapasse
+            saldo_ant_tipo = (forn_data.get("saldo_anterior_tipo") or "")[:1]
+
             fornecedor = Fornecedor(
                 arquivo_origem_id   = arquivo.id,
-                codigo_conta        = forn_data["codigo_conta"],
-                conta_contabil      = forn_data["conta_contabil"],
+                codigo_conta        = forn_data["codigo_conta"][:10],
+                conta_contabil      = forn_data["conta_contabil"][:50],
                 nome_fornecedor     = forn_data["nome_fornecedor"],
                 saldo_anterior      = saldo_anterior,
-                saldo_anterior_tipo = forn_data.get("saldo_anterior_tipo", ""),
+                saldo_anterior_tipo = saldo_ant_tipo,
                 total_debito        = total_debito,
                 total_credito       = total_credito,
                 saldo_final         = saldo_anterior + total_credito - total_debito,
@@ -200,18 +203,27 @@ def _processar_arquivo_background(arquivo_id: int, conteudo: bytes) -> None:
                 vc    = Decimal(str(lanc_data["valor_credito"]))
                 saldo = Decimal(str(lanc_data["saldo_apos_lancamento"]))
 
+                # Safety net: truncar campos com tamanho definido antes do insert.
+                # A migration já alargou as colunas, mas isso evita qualquer
+                # StringDataRightTruncation em caso de BD desatualizado.
+                lote_val          = (lanc_data.get("lote") or "")[:50] or None
+                conta_partida_val = (str(lanc_data.get("conta_partida") or "")[:20]) or None
+                saldo_tipo_val    = (lanc_data.get("saldo_tipo") or "")[:1]
+                numero_nf_val     = (lanc_data.get("numero_nf") or "")[:50] or None
+                tipo_op_val       = (lanc_data.get("tipo_operacao") or "OUTRO")[:20]
+
                 db.add(LancamentoFornecedor(
                     fornecedor_id         = fornecedor.id,
                     data_lancamento       = lanc_data["data_lancamento"],
-                    lote                  = lanc_data.get("lote"),
+                    lote                  = lote_val,
                     historico             = lanc_data["historico"],
-                    conta_partida         = lanc_data.get("conta_partida"),
+                    conta_partida         = conta_partida_val,
                     valor_debito          = vd,
                     valor_credito         = vc,
                     saldo_apos_lancamento = saldo,
-                    saldo_tipo            = lanc_data.get("saldo_tipo", ""),
-                    tipo_operacao         = lanc_data["tipo_operacao"],
-                    numero_nf             = lanc_data.get("numero_nf"),
+                    saldo_tipo            = saldo_tipo_val,
+                    tipo_operacao         = tipo_op_val,
+                    numero_nf             = numero_nf_val,
                     cnpj_historico        = lanc_data.get("cnpj_historico"),
                     valor_saldo           = vc if lanc_data["tipo_operacao"] == "COMPRA" else Decimal("0"),
                     classificado_por_ia   = lanc_data.get("classificado_por_ia", False),

@@ -70,27 +70,33 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
     # ── Migrations idempotentes — alarga colunas que cresceram ────────────────
-    # Usar bloco DO anônimo para ignorar erro se a coluna já tiver o tamanho correto.
+    # Cada ALTER TABLE roda em transação própria com try/except em Python.
+    # Isso é mais robusto que o bloco DO $$ que pode engolir erros silenciosamente.
     _migrations = [
         # lote: VARCHAR(10) → VARCHAR(50)  (lotes como '2500000002616' têm 13+ chars)
-        """
-        DO $$ BEGIN
-            ALTER TABLE lancamento_fornecedor
-                ALTER COLUMN lote TYPE VARCHAR(50);
-        EXCEPTION WHEN others THEN NULL; END $$;
-        """,
+        (
+            "lancamento_fornecedor.lote → VARCHAR(50)",
+            "ALTER TABLE lancamento_fornecedor ALTER COLUMN lote TYPE VARCHAR(50)",
+        ),
         # conta_partida: VARCHAR(10) → VARCHAR(20)
-        """
-        DO $$ BEGIN
-            ALTER TABLE lancamento_fornecedor
-                ALTER COLUMN conta_partida TYPE VARCHAR(20);
-        EXCEPTION WHEN others THEN NULL; END $$;
-        """,
+        (
+            "lancamento_fornecedor.conta_partida → VARCHAR(20)",
+            "ALTER TABLE lancamento_fornecedor ALTER COLUMN conta_partida TYPE VARCHAR(20)",
+        ),
     ]
 
+    # Valida conexão antes de iniciar as migrations
     with engine.begin() as conn:
-        conn.execute(text("SELECT 1"))  # valida conexão
-        for sql in _migrations:
-            conn.execute(text(sql))
+        conn.execute(text("SELECT 1"))
+
+    for desc, sql in _migrations:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            logger.info("✅ Migration aplicada: %s", desc)
+        except Exception as exc:
+            # Pode ocorrer se a coluna já tem o tamanho correto (no-op no Postgres)
+            # ou se a tabela ainda não existe (primeiro boot sem DB).
+            logger.info("ℹ️  Migration ignorada (%s): %s", desc, str(exc)[:120])
 
     logger.info("✅ Banco de dados: tabelas verificadas/criadas, migrations aplicadas, conexão OK.")
