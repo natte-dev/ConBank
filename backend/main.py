@@ -166,8 +166,20 @@ def _processar_arquivo_background(arquivo_id: int, conteudo: bytes) -> None:
                 logger.info("   Processados %d / %d", idx, len(dados["fornecedores"]))
 
             saldo_anterior = Decimal(str(forn_data.get("saldo_anterior", 0)))
-            total_credito  = Decimal(str(forn_data.get("total_credito", 0)))
-            total_debito   = Decimal(str(forn_data.get("total_debito", 0)))
+
+            # Recalcula totais a partir dos lançamentos individuais — mais confiável
+            # do que os totais retornados pela IA (podem ter erro de escala).
+            lancamentos_raw = forn_data.get("lancamentos", [])
+            total_debito_calc  = sum(Decimal(str(l.get("valor_debito",  0))) for l in lancamentos_raw)
+            total_credito_calc = sum(Decimal(str(l.get("valor_credito", 0))) for l in lancamentos_raw)
+
+            # Usa os totais da IA apenas quando os calculados são zero
+            # (bloco com todos os lançamentos sintéticos ou fallback)
+            total_debito_ia  = Decimal(str(forn_data.get("total_debito",  0)))
+            total_credito_ia = Decimal(str(forn_data.get("total_credito", 0)))
+
+            total_debito  = total_debito_calc  if total_debito_calc  > 0 else total_debito_ia
+            total_credito = total_credito_calc if total_credito_calc > 0 else total_credito_ia
 
             fornecedor = Fornecedor(
                 arquivo_origem_id   = arquivo.id,
@@ -253,10 +265,73 @@ async def upload_arquivo(
         conteudo = await file.read()
         hash_arquivo = calcular_hash_arquivo(conteudo)
 
-        # Idempotência: rejeita duplicatas
-        if db.query(ArquivoImportado).filter(ArquivoImportado.hash_arquivo == hash_arquivo).first():
-            raise HTTPException(status_code=400, detail="Arquivo já foi importado anteriormente")
+        # ── Verifica duplicata ──────────────────────────────────────────────────
+        existente = db.query(ArquivoImportado).filter(
+            ArquivoImportado.hash_arquivo == hash_arquivo
+        ).first()
 
+        if existente:
+            # Já processando → devolve o id para o cliente fazer polling
+            if existente.status == "PROCESSANDO":
+                return {
+                    "success": True,
+                    "arquivo_id": existente.id,
+                    "status": "PROCESSANDO",
+                    "message": "Arquivo já está sendo processado.",
+                }
+
+            # Concluído com dados → rejeita duplicata real
+            if existente.status == "CONCLUIDO" and (existente.total_fornecedores or 0) > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Arquivo já foi importado anteriormente",
+                )
+
+            # ERRO ou CONCLUIDO com 0 fornecedores → apaga e reprocessa
+            logger.info(
+                "♻️ Reprocessando arquivo_id=%d (status=%s, fornecedores=%d)",
+                existente.id, existente.status, existente.total_fornecedores or 0,
+            )
+            forn_ids = [
+                r[0] for r in
+                db.query(Fornecedor.id)
+                  .filter(Fornecedor.arquivo_origem_id == existente.id)
+                  .all()
+            ]
+            if forn_ids:
+                db.query(ConciliacaoInterna).filter(
+                    ConciliacaoInterna.fornecedor_id.in_(forn_ids)
+                ).delete(synchronize_session=False)
+                db.query(Divergencia).filter(
+                    Divergencia.fornecedor_id.in_(forn_ids)
+                ).delete(synchronize_session=False)
+                db.query(LancamentoFornecedor).filter(
+                    LancamentoFornecedor.fornecedor_id.in_(forn_ids)
+                ).delete(synchronize_session=False)
+                db.query(Fornecedor).filter(
+                    Fornecedor.arquivo_origem_id == existente.id
+                ).delete(synchronize_session=False)
+
+            existente.status             = "PROCESSANDO"
+            existente.total_fornecedores = 0
+            existente.total_lancamentos  = 0
+            existente.mensagem_erro      = None
+            existente.empresa            = None
+            existente.cnpj_empresa       = None
+            existente.data_inicio        = None
+            existente.data_fim           = None
+            db.commit()
+            db.refresh(existente)
+
+            background_tasks.add_task(_processar_arquivo_background, existente.id, conteudo)
+            return {
+                "success": True,
+                "arquivo_id": existente.id,
+                "status": "PROCESSANDO",
+                "message": "Reprocessamento iniciado — consulte o status para acompanhar.",
+            }
+
+        # ── Arquivo novo ────────────────────────────────────────────────────────
         arquivo = ArquivoImportado(
             nome_arquivo=file.filename,
             hash_arquivo=hash_arquivo,
