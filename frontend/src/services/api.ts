@@ -132,7 +132,7 @@ export const apiService = {
   aguardarProcessamento: async (
     arquivoId: number,
     onProgresso?: (status: string, total_fornecedores: number) => void,
-  ): Promise<{ status: string; total_fornecedores: number; total_lancamentos: number }> => {
+  ): Promise<{ status: string; total_fornecedores: number; total_lancamentos: number; mensagem_erro?: string }> => {
     const INTERVALO_MS = 5_000;
     const TIMEOUT_MS   = 30 * 60 * 1000; // 30 min máximo
     const inicio = Date.now();

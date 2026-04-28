@@ -919,7 +919,7 @@ function App() {
       // Se o backend ainda está processando, faz polling até concluir
       if (resposta.status === 'PROCESSANDO') {
         setUploadProgresso('Processando PDF com IA... (pode levar alguns minutos)')
-        await apiService.aguardarProcessamento(
+        const resultado = await apiService.aguardarProcessamento(
           resposta.arquivo_id,
           (status, totalFornecedores) => {
             if (status === 'PROCESSANDO') {
@@ -931,6 +931,12 @@ function App() {
             }
           }
         )
+        if (resultado.status === 'ERRO') {
+          setErro(resultado.mensagem_erro || 'Erro ao processar o arquivo. Verifique o formato do PDF.')
+          setUploadProgresso(null)
+          setUploading(false)
+          return
+        }
       }
 
       setUploadProgresso(null)
